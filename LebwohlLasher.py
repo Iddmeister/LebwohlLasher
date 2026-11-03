@@ -94,7 +94,7 @@ def plotdat(arr,pflag,nmax):
     ax.set_aspect('equal')
     plt.show()
 #=======================================================================
-def savedat(arr,nsteps,Ts,runtime,ratio,energy,order,nmax):
+def savedat(arr,nsteps,Ts,runtime,ratio,energy,order,nmax,_filename=""):
     """
     Arguments:
 	  arr (float(nmax,nmax)) = array that contains lattice data;
@@ -114,7 +114,7 @@ def savedat(arr,nsteps,Ts,runtime,ratio,energy,order,nmax):
     """
     # Create filename based on current date and time.
     current_datetime = datetime.datetime.now().strftime("%a-%d-%b-%Y-at-%I-%M-%S%p")
-    filename = "LL-Output-{:s}.txt".format(current_datetime)
+    filename = "LL-Output-{:s}.txt".format(current_datetime) if len(_filename) <= 0 else _filename
     FileOut = open(OUTPUT_DIR + filename, "w")
     # Write a header with run parameters
     print("#=====================================================",file=FileOut)
@@ -257,7 +257,7 @@ def MC_step(arr,Ts,nmax):
                     arr[ix,iy] -= ang
     return accept/(nmax*nmax)
 #=======================================================================
-def main(program, nsteps, nmax, temp, pflag):
+def main(program, nsteps, nmax, temp, pflag, _filename=""):
     """
     Arguments:
 	  program (string) = the name of the program;
@@ -295,7 +295,7 @@ def main(program, nsteps, nmax, temp, pflag):
     # Final outputs
     print("{}: Size: {:d}, Steps: {:d}, T*: {:5.3f}: Order: {:5.3f}, Time: {:8.6f} s".format(program, nmax,nsteps,temp,order[nsteps-1],runtime))
     # Plot final frame of lattice and generate output file
-    savedat(lattice,nsteps,temp,runtime,ratio,energy,order,nmax)
+    savedat(lattice,nsteps,temp,runtime,ratio,energy,order,nmax, _filename="" if len(_filename) <= 0 else _filename)
     plotdat(lattice,pflag,nmax)
 #=======================================================================
 # Main part of program, getting command line arguments and calling
