@@ -29,6 +29,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 
+from mpi4py import MPI
+
+rank = MPI.COMM_WORLD.Get_rank()
+size = MPI.COMM_WORLD.Get_size()
+
+print(rank)
+print(size)
 
 OUTPUT_DIR = "output/"
 
@@ -236,6 +243,12 @@ def MC_step(arr,Ts,nmax):
     xran = np.random.randint(0,high=nmax, size=(nmax,nmax))
     yran = np.random.randint(0,high=nmax, size=(nmax,nmax))
     aran = np.random.normal(scale=scale, size=(nmax,nmax))
+
+
+    ##############
+    # Nested For Loops - mpi4py parallelisaition
+    ##############
+
     for i in range(nmax):
         for j in range(nmax):
             ix = xran[i,j]
