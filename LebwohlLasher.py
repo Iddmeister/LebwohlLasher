@@ -29,6 +29,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 
+
+OUTPUT_DIR = "output/"
+
 #=======================================================================
 def initdat(nmax):
     """
@@ -112,7 +115,7 @@ def savedat(arr,nsteps,Ts,runtime,ratio,energy,order,nmax):
     # Create filename based on current date and time.
     current_datetime = datetime.datetime.now().strftime("%a-%d-%b-%Y-at-%I-%M-%S%p")
     filename = "LL-Output-{:s}.txt".format(current_datetime)
-    FileOut = open(filename,"w")
+    FileOut = open(OUTPUT_DIR + filename, "w")
     # Write a header with run parameters
     print("#=====================================================",file=FileOut)
     print("# File created:        {:s}".format(current_datetime),file=FileOut)
