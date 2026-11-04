@@ -131,3 +131,6 @@ def test_main(nsteps, nmax, temp, seed, expect_filepath):
                     continue
 
                 assert test_line == expected_lines[i]
+
+def test_MPI_initialized():
+    assert MPI.Is_initialized()
