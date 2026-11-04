@@ -31,11 +31,8 @@ import matplotlib as mpl
 
 from mpi4py import MPI
 
-rank = MPI.COMM_WORLD.Get_rank()
-size = MPI.COMM_WORLD.Get_size()
-
-print(rank)
-print(size)
+mpi_rank = MPI.COMM_WORLD.Get_rank()
+mpi_size = MPI.COMM_WORLD.Get_size()
 
 OUTPUT_DIR = "output/"
 
@@ -240,16 +237,47 @@ def MC_step(arr,Ts,nmax):
     # with temperature.
     scale=0.1+Ts
     accept = 0
-    xran = np.random.randint(0,high=nmax, size=(nmax,nmax))
-    yran = np.random.randint(0,high=nmax, size=(nmax,nmax))
-    aran = np.random.normal(scale=scale, size=(nmax,nmax))
+
+    xran = np.zeros(shape=(nmax, nmax))
+    yran = np.zeros(shape=(nmax, nmax))
+    aran = np.zeros(shape=(nmax, nmax))
+
+    if mpi_rank == 0:
+
+        xran = np.random.randint(0,high=nmax, size=(nmax,nmax))
+        yran = np.random.randint(0,high=nmax, size=(nmax,nmax))
+        aran = np.random.normal(scale=scale, size=(nmax,nmax))
+
+    ### Should change to scatter so not broadcasting all data, only columns required
+    xran = MPI.Comm.bcast(MPI.COMM_WORLD, [xran, MPI.INT], root=0)[0]
+    yran = MPI.Comm.bcast(MPI.COMM_WORLD, [yran, MPI.INT], root=0)[0]
+    aran = MPI.Comm.bcast(MPI.COMM_WORLD, [aran, MPI.INT], root=0)[0]
 
 
+    # Wait for sync
+    MPI.Comm.barrier(MPI.COMM_WORLD)
     ##############
     # Nested For Loops - mpi4py parallelisaition
     ##############
 
-    for i in range(nmax):
+
+    ## Define chunk size and remainder for uneven grid sizes
+    chunk = nmax // mpi_size
+    remainder = nmax % mpi_size
+
+    # Define start(inclusive) and end(exclusive) indexes for mpi distribution
+    start = 0
+    end = 0
+
+    if (mpi_rank < remainder):
+        start = mpi_rank*(chunk+1)
+        end = start + chunk + 1
+
+    else:
+        start = (mpi_rank * chunk) + remainder
+        end = start + chunk
+
+    for i in range(start, end):
         for j in range(nmax):
             ix = xran[i,j]
             iy = yran[i,j]
@@ -264,10 +292,36 @@ def MC_step(arr,Ts,nmax):
             # exp( -(E_new - E_old) / T* ) >= rand(0,1)
                 boltz = np.exp( -(en1 - en0) / Ts )
 
+                # This random number should be okay on multiple cpus, probably gonna mess up test cause not seeded
                 if boltz >= np.random.uniform(0.0,1.0):
                     accept += 1
                 else:
                     arr[ix,iy] -= ang
+
+    MPI.Comm.barrier(MPI.COMM_WORLD)
+
+
+    # Sum accept on master rank
+    MPI.Comm.allreduce(MPI.COMM_WORLD, [accept, MPI.INT], MPI.SUM)
+    accept = float(accept)
+
+    # Sync lattice state between cpus
+
+    left = mpi_rank - 1
+    right = mpi_rank + 1
+
+
+    if mpi_rank > 0:
+        # MPI.Comm.sendrecv(MPI.COMM_WORLD, [arr[start], MPI.FLOAT64_T], left, 0, arr[start-1], left)
+        arr[start-1] = MPI.Comm.sendrecv(MPI.COMM_WORLD, [arr[start], MPI.FLOAT64_T], left, 0)[0]
+
+    if mpi_rank < mpi_size - 1:
+        # MPI.Comm.sendrecv(MPI.COMM_WORLD, [arr[end-1], MPI.FLOAT64_T], right, 0, arr[end], right)
+        arr[end] = MPI.Comm.sendrecv(MPI.COMM_WORLD, [arr[end-1], MPI.FLOAT64_T], right, 0)[0]
+
+
+    MPI.Comm.barrier(MPI.COMM_WORLD)
+
     return accept/(nmax*nmax)
 #=======================================================================
 def main(program, nsteps, nmax, temp, pflag, _filename=""):
@@ -285,31 +339,45 @@ def main(program, nsteps, nmax, temp, pflag, _filename=""):
     """
     # Create and initialise lattice
     lattice = initdat(nmax)
+    
     # Plot initial frame of lattice
     plotdat(lattice,pflag,nmax)
     # Create arrays to store energy, acceptance ratio and order parameter
     energy = np.zeros(nsteps+1,dtype=np.dtype)
     ratio = np.zeros(nsteps+1,dtype=np.dtype)
     order = np.zeros(nsteps+1,dtype=np.dtype)
-    # Set initial values in arrays
-    energy[0] = all_energy(lattice,nmax)
-    ratio[0] = 0.5 # ideal value
-    order[0] = get_order(lattice,nmax)
+
+    if mpi_rank == 0:
+
+        # Set initial values in arrays
+        energy[0] = all_energy(lattice,nmax)
+        ratio[0] = 0.5 # ideal value
+        order[0] = get_order(lattice,nmax)
 
     # Begin doing and timing some MC steps.
     initial = time.time()
+    # Run calculation on all ranks
     for it in range(1,nsteps+1):
-        ratio[it] = MC_step(lattice,temp,nmax)
-        energy[it] = all_energy(lattice,nmax)
-        order[it] = get_order(lattice,nmax)
+
+        mc_ratio = MC_step(lattice,temp,nmax)
+
+        # Only update data on master rank
+        if mpi_rank == 0:
+
+            ratio[it] = mc_ratio
+            energy[it] = all_energy(lattice,nmax)
+            order[it] = get_order(lattice,nmax)
+
     final = time.time()
     runtime = final-initial
+
+    if mpi_rank == 0:
     
-    # Final outputs
-    print("{}: Size: {:d}, Steps: {:d}, T*: {:5.3f}: Order: {:5.3f}, Time: {:8.6f} s".format(program, nmax,nsteps,temp,order[nsteps-1],runtime))
-    # Plot final frame of lattice and generate output file
-    savedat(lattice,nsteps,temp,runtime,ratio,energy,order,nmax, _filename="" if len(_filename) <= 0 else _filename)
-    plotdat(lattice,pflag,nmax)
+        # Final outputs
+        print("{}: Size: {:d}, Steps: {:d}, T*: {:5.3f}: Order: {:5.3f}, Time: {:8.6f} s".format(program, nmax,nsteps,temp,order[nsteps-1],runtime))
+        # Plot final frame of lattice and generate output file
+        savedat(lattice,nsteps,temp,runtime,ratio,energy,order,nmax, _filename="" if len(_filename) <= 0 else _filename)
+        plotdat(lattice,pflag,nmax)
 #=======================================================================
 # Main part of program, getting command line arguments and calling
 # main simulation function.
