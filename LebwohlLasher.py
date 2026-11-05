@@ -241,21 +241,29 @@ def MC_step(arr,Ts,nmax):
     xran = np.zeros(shape=(nmax, nmax))
     yran = np.zeros(shape=(nmax, nmax))
     aran = np.zeros(shape=(nmax, nmax))
+    boltz_limit = np.zeros(shape=(nmax, nmax))
+
 
     if mpi_rank == 0:
 
         xran = np.random.randint(0,high=nmax, size=(nmax,nmax))
         yran = np.random.randint(0,high=nmax, size=(nmax,nmax))
         aran = np.random.normal(scale=scale, size=(nmax,nmax))
+        boltz_limit = np.random.uniform(0.0, 1.0, size=(nmax, nmax))
+        
 
     ### Should change to scatter so not broadcasting all data, only columns required
     xran = MPI.Comm.bcast(MPI.COMM_WORLD, [xran, MPI.INT], root=0)[0]
     yran = MPI.Comm.bcast(MPI.COMM_WORLD, [yran, MPI.INT], root=0)[0]
-    aran = MPI.Comm.bcast(MPI.COMM_WORLD, [aran, MPI.INT], root=0)[0]
+    aran = MPI.Comm.bcast(MPI.COMM_WORLD, [aran, MPI.FLOAT64_T], root=0)[0]
+    boltz_limit = MPI.Comm.bcast(MPI.COMM_WORLD, [boltz_limit, MPI.FLOAT64_T], root=0)[0]
+
+    # print(f"Before update {mpi_rank} = {arr[3,4]}")
 
 
     # Wait for sync
     MPI.Comm.barrier(MPI.COMM_WORLD)
+
     ##############
     # Nested For Loops - mpi4py parallelisaition
     ##############
@@ -269,6 +277,11 @@ def MC_step(arr,Ts,nmax):
     start = 0
     end = 0
 
+
+    if mpi_rank == 0:
+        print(f"initial: {arr}")
+
+
     if (mpi_rank < remainder):
         start = mpi_rank*(chunk+1)
         end = start + chunk + 1
@@ -277,24 +290,35 @@ def MC_step(arr,Ts,nmax):
         start = (mpi_rank * chunk) + remainder
         end = start + chunk
 
-    for i in range(start, end):
+    # Loop through all cells in random ditribution
+    # I don't know if this even speeds up anymore
+    for i in range(nmax):
         for j in range(nmax):
             ix = xran[i,j]
             iy = yran[i,j]
+
+            # If the random cell does not fall into this chunk then skip it
+            if ix < start or ix >= end:
+                continue
+
             ang = aran[i,j]
             en0 = one_energy(arr,ix,iy,nmax)
             arr[ix,iy] += ang
             en1 = one_energy(arr,ix,iy,nmax)
             if en1<=en0:
                 accept += 1
+                # if i == 3 and j == 4:
+                    # print(f"rank {mpi_rank} Accepted at {i}, {j}")
             else:
             # Now apply the Monte Carlo test - compare
             # exp( -(E_new - E_old) / T* ) >= rand(0,1)
                 boltz = np.exp( -(en1 - en0) / Ts )
 
-                # This random number should be okay on multiple cpus, probably gonna mess up test cause not seeded
-                if boltz >= np.random.uniform(0.0,1.0):
+                #Changed comparison to use pregenerated array of uniform random values - a lot of these are redundant
+                if boltz >= boltz_limit[i,j]:
                     accept += 1
+                    # if i == 3 and j == 4:
+                        # print(f"rank {mpi_rank} Accepted at {i}, {j}")
                 else:
                     arr[ix,iy] -= ang
 
@@ -302,25 +326,55 @@ def MC_step(arr,Ts,nmax):
 
 
     # Sum accept on master rank
-    MPI.Comm.allreduce(MPI.COMM_WORLD, [accept, MPI.INT], MPI.SUM)
+    # MPI.Comm.Allreduce(MPI.COMM_WORLD, [accept, MPI.INT64_T], [accept, MPI.INT64_T], MPI.SUM)
+    accept = MPI.Comm.allreduce(MPI.COMM_WORLD, accept, MPI.SUM)
     accept = float(accept)
 
-    # Sync lattice state between cpus
-
-    left = mpi_rank - 1
-    right = mpi_rank + 1
+    # Sync lattice states to master rank
 
 
-    if mpi_rank > 0:
-        # MPI.Comm.sendrecv(MPI.COMM_WORLD, [arr[start], MPI.FLOAT64_T], left, 0, arr[start-1], left)
-        arr[start-1] = MPI.Comm.sendrecv(MPI.COMM_WORLD, [arr[start], MPI.FLOAT64_T], left, 0)[0]
+    # MPI.Comm.Allgatherv(MPI.COMM_WORLD, [arr, sizes, disp, MPI.FLOAT64_T], arr)
 
-    if mpi_rank < mpi_size - 1:
-        # MPI.Comm.sendrecv(MPI.COMM_WORLD, [arr[end-1], MPI.FLOAT64_T], right, 0, arr[end], right)
-        arr[end] = MPI.Comm.sendrecv(MPI.COMM_WORLD, [arr[end-1], MPI.FLOAT64_T], right, 0)[0]
-
+    print(f"{mpi_rank}: currently {arr[start:end, :]}")
 
     MPI.Comm.barrier(MPI.COMM_WORLD)
+
+
+    # once, in main (or module level)
+    chunk, rem = divmod(nmax, mpi_size)
+    rows = np.array([chunk + (1 if r < rem else 0) for r in range(mpi_size)])
+    counts = rows * nmax
+    displs = np.concatenate(([0], np.cumsum(counts)[:-1]))
+
+    # in MC_step
+    MPI.COMM_WORLD.Allgatherv(MPI.IN_PLACE, [arr, counts, displs, MPI.DOUBLE])
+
+    # MPI.Comm.Allgatherv(MPI.COMM_WORLD, [arr[start:end, :], len(arr[start:end, :]), start, MPI.FLOAT64_T], [arr, MPI.FLOAT64_T])
+    
+    
+    # MPI.Comm.Allgatherv(MPI.COMM_WORLD, arr[start:end, :], [arr, (end-start)*nmax, start, MPI.FLOAT64_T])
+
+
+    # MPI.Comm.Allgatherv(MPI.COMM_WORLD, [arr[start:end, :], (end-start)*nmax, start, MPI.FLOAT64_T], [arr, (end-start)*nmax, start, MPI.FLOAT64_T])
+
+    if mpi_rank == 0:
+        print(arr)
+    # Halo code - only works if energy and order calcs are paralellised
+
+    # left = mpi_rank - 1
+    # right = mpi_rank + 1
+
+    # if mpi_rank > 0:
+
+    #     MPI.Comm.Sendrecv(MPI.COMM_WORLD, arr[start], left, 0, arr[start-1], left, 0)
+
+    # if mpi_rank < mpi_size - 1:
+
+    #     MPI.Comm.Sendrecv(MPI.COMM_WORLD, arr[end-1], right, 0, arr[end], right, 0)
+
+    
+    MPI.Comm.barrier(MPI.COMM_WORLD)
+
 
     return accept/(nmax*nmax)
 #=======================================================================
@@ -383,12 +437,16 @@ def main(program, nsteps, nmax, temp, pflag, _filename=""):
 # main simulation function.
 #
 if __name__ == '__main__':
-    if int(len(sys.argv)) == 5:
+    if int(len(sys.argv)) == 6:
         PROGNAME = sys.argv[0]
         ITERATIONS = int(sys.argv[1])
         SIZE = int(sys.argv[2])
         TEMPERATURE = float(sys.argv[3])
         PLOTFLAG = int(sys.argv[4])
+        SEED = int(sys.argv[5])
+        
+        np.random.seed(SEED)
+
         main(PROGNAME, ITERATIONS, SIZE, TEMPERATURE, PLOTFLAG)
     else:
         print("Usage: python {} <ITERATIONS> <SIZE> <TEMPERATURE> <PLOTFLAG>".format(sys.argv[0]))

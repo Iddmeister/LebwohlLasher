@@ -58,24 +58,28 @@ def test_get_order(lattice, nmax, expect):
 
 
 @pytest.mark.parametrize("lattice, Ts, nmax, seed, expect", [
-    (expected.init_data_size_10_seed_56, 1.0, 10, 0, 0.67),
-    (expected.init_data_size_10_seed_0, 1.0, 10, 111, 0.67),
-    (expected.init_data_size_7_seed_0, 1.0, 7, 0, 0.7142857142857143),
+    (expected.init_data_size_10_seed_56, 1.0, 10, 0, 0.65),
+    (expected.init_data_size_10_seed_0, 1.0, 10, 111, 0.76),
+    (expected.init_data_size_7_seed_0, 1.0, 7, 0, 0.7551020408163265),
     (expected.init_data_size_10_seed_56, 2.0, 10, 0, 0.74),
-    (expected.init_data_size_10_seed_0, 1.9999, 10, 0, 0.69),
-    (expected.init_data_size_7_seed_0, 0.0000001, 7, 0, 0.3673469387755102),
+    (expected.init_data_size_10_seed_0, 1.9999, 10, 0, 0.73),
+    (expected.init_data_size_7_seed_0, 0.0000001, 7, 0, 0.4489795918367347),
     
 ])
 
 
 def test_MC_step(lattice, Ts, nmax, seed, expect):
-
+    print(mpi_rank)
     np.random.seed(seed)
 
-    assert MC_step(lattice, Ts, nmax) == expect
+    result = MC_step(lattice, Ts, nmax)
+    print(result)
+    if mpi_rank == 0:
+        assert result == expect
+
 
 @pytest.mark.parametrize("lattice, nsteps, Ts, runtime, ratio, energy, order, nmax, expect_filepath", [
-    (expected.init_data_size_10_seed_56, 100, 1.0, 0.256650, expected.savedat_steps_100_size_10_ratio, expected.savedat_steps_100_size_10_energy, expected.savedat_steps_100_size_10_order, 10, "expected_test_output_1.txt"),
+    (expected.init_data_size_10_seed_56, 100, 1.0, 0.256650, expected.savedat_ratio, expected.savedat_energy, expected.savedat_order, 10, "savedat_expected_test_output.txt"),
 ])
 
 
@@ -111,26 +115,29 @@ def test_main(nsteps, nmax, temp, seed, expect_filepath):
     np.random.seed(seed)
 
     main("test", nsteps, nmax, temp, 0, _filename="test_output.txt")
-      
-    with open("output/test_output.txt") as test_f:
 
-        with open(expect_filepath) as expected_f:
+    if mpi_rank == 0:
+        
+        with open("output/test_output.txt") as test_f:
 
-
-            test_lines = test_f.readlines()
-            expected_lines = expected_f.readlines()
+            with open(expect_filepath) as expected_f:
 
 
-            for i, test_line in enumerate(test_lines):
-                #Skip line containing date
-                if i == 1:
-                    continue
+                test_lines = test_f.readlines()
+                expected_lines = expected_f.readlines()
 
-                #Skip line containing run time
-                if i == 5:
-                    continue
 
-                assert test_line == expected_lines[i]
+                for i, test_line in enumerate(test_lines):
+                    #Skip line containing date
+                    if i == 1:
+                        continue
+
+                    #Skip line containing run time
+                    if i == 5:
+                        continue
+
+                    assert test_line == expected_lines[i]
 
 def test_MPI_initialized():
     assert MPI.Is_initialized()
+
