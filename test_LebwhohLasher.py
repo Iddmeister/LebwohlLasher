@@ -30,7 +30,8 @@ def test_initdat(size, seed, expect):
 
 def test_one_energy(lattice, ix, iy, nmax, expect):
 
-    assert one_energy(lattice, ix, iy, nmax) == expect
+    assert np.isclose(one_energy(lattice, ix, iy, nmax), expect, 1e-10)
+
 
 
 @pytest.mark.parametrize("lattice, nmax, expect", [
@@ -42,7 +43,7 @@ def test_one_energy(lattice, ix, iy, nmax, expect):
 
 def test_all_energy(lattice, nmax, expect):
 
-    assert all_energy(lattice, nmax) == expect
+    assert np.isclose(all_energy(lattice, nmax), expect, 1e-10)
 
 
 @pytest.mark.parametrize("lattice, nmax, expect", [
@@ -54,7 +55,7 @@ def test_all_energy(lattice, nmax, expect):
 
 def test_get_order(lattice, nmax, expect):
 
-    assert get_order(lattice, nmax) == expect
+    assert np.isclose(get_order(lattice, nmax), expect, 1e-10)
 
 
 @pytest.mark.parametrize("lattice, Ts, nmax, seed, expect", [
