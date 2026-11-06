@@ -180,10 +180,37 @@ def all_energy(arr,nmax):
 	Returns:
 	  enall (float) = reduced energy of lattice.
     """
+
+    # Sync current lattice state across ranks
+    arr = MPI.Comm.bcast(MPI.COMM_WORLD, [arr, MPI.FLOAT64_T], 0)[0]
+
+    ## Define chunk size and remainder for uneven grid sizes
+    chunk = nmax // mpi_size
+    remainder = nmax % mpi_size
+    # Define start(inclusive) and end(exclusive) indexes for mpi distribution
+    start = 0
+    end = 0
+
+    if (mpi_rank < remainder):
+        start = mpi_rank*(chunk+1)
+        end = start + chunk + 1
+    else:
+        start = (mpi_rank * chunk) + remainder
+        end = start + chunk
+
+
     enall = 0.0
-    for i in range(nmax):
+
+    # Calc total energy for each chunk of lattice, each chunk handled by a different rank
+    for i in range(start, end):
         for j in range(nmax):
             enall += one_energy(arr,i,j,nmax)
+
+    # Sum total energy across all ranks to master rank
+    enall = MPI.Comm.reduce(MPI.COMM_WORLD, enall, MPI.SUM, 0)
+
+    MPI.Comm.barrier(MPI.COMM_WORLD)
+
     return enall
 #=======================================================================
 def get_order(arr,nmax):
@@ -214,7 +241,10 @@ def get_order(arr,nmax):
     eigenvalues,eigenvectors = np.linalg.eig(Qab)
     return eigenvalues.max()
 #=======================================================================
-def MC_step(arr,Ts,nmax):
+
+
+
+def MC_step_parallel(arr,Ts,nmax):
     """
     Arguments:
 	  arr (float(nmax,nmax)) = array that contains lattice data;
@@ -264,11 +294,6 @@ def MC_step(arr,Ts,nmax):
     # Wait for sync
     MPI.Comm.barrier(MPI.COMM_WORLD)
 
-    ##############
-    # Nested For Loops - mpi4py parallelisaition
-    ##############
-
-
     ## Define chunk size and remainder for uneven grid sizes
     chunk = nmax // mpi_size
     remainder = nmax % mpi_size
@@ -276,11 +301,6 @@ def MC_step(arr,Ts,nmax):
     # Define start(inclusive) and end(exclusive) indexes for mpi distribution
     start = 0
     end = 0
-
-
-    if mpi_rank == 0:
-        print(f"initial: {arr}")
-
 
     if (mpi_rank < remainder):
         start = mpi_rank*(chunk+1)
@@ -292,37 +312,81 @@ def MC_step(arr,Ts,nmax):
 
     # Loop through all cells in random ditribution
     # I don't know if this even speeds up anymore
-    for i in range(nmax):
-        for j in range(nmax):
-            ix = xran[i,j]
-            iy = yran[i,j]
 
-            # If the random cell does not fall into this chunk then skip it
-            if ix < start or ix >= end:
-                continue
+    # Split lattice into checkerboard pattern
+    for run in range(0, 2):
 
-            ang = aran[i,j]
-            en0 = one_energy(arr,ix,iy,nmax)
-            arr[ix,iy] += ang
-            en1 = one_energy(arr,ix,iy,nmax)
-            if en1<=en0:
-                accept += 1
-                # if i == 3 and j == 4:
-                    # print(f"rank {mpi_rank} Accepted at {i}, {j}")
-            else:
-            # Now apply the Monte Carlo test - compare
-            # exp( -(E_new - E_old) / T* ) >= rand(0,1)
-                boltz = np.exp( -(en1 - en0) / Ts )
+        
 
-                #Changed comparison to use pregenerated array of uniform random values - a lot of these are redundant
-                if boltz >= boltz_limit[i,j]:
-                    accept += 1
-                    # if i == 3 and j == 4:
-                        # print(f"rank {mpi_rank} Accepted at {i}, {j}")
+        for i in range(nmax):
+            for j in range(nmax):
+                ix = xran[i,j]
+                iy = yran[i,j]
+
+                # If the random cell does not fall into this chunk then skip it
+                if ix < start or ix >= end:
+                    continue
+
+                xeven = (ix % 2) == 0
+                yeven = (iy % 2) == 0
+
+                #Check which sets of cells are being run
+                
+                if (xeven == yeven):
+                    if run == 1:
+                        continue
                 else:
-                    arr[ix,iy] -= ang
+                    if run == 0:
+                        continue
 
-    MPI.Comm.barrier(MPI.COMM_WORLD)
+
+                ang = aran[i,j]
+                en0 = one_energy(arr,ix,iy,nmax)
+                arr[ix,iy] += ang
+                en1 = one_energy(arr,ix,iy,nmax)
+                if en1<=en0:
+                    accept += 1
+                else:
+                # Now apply the Monte Carlo test - compare
+                # exp( -(E_new - E_old) / T* ) >= rand(0,1)
+                    boltz = np.exp( -(en1 - en0) / Ts )
+
+                    #Changed comparison to use pregenerated array of uniform random values - a lot of these are redundant
+                    if boltz >= boltz_limit[i,j]:
+                        accept += 1
+                        # if i == 3 and j == 4:
+                            # print(f"rank {mpi_rank} Accepted at {i}, {j}")
+                    else:
+                        arr[ix,iy] -= ang
+
+
+
+        #### Between runs
+        MPI.Comm.barrier(MPI.COMM_WORLD)
+
+        if run == 1:
+            break
+
+        #Exchange borders between ranks
+
+        left = mpi_rank - 1
+        right = mpi_rank + 1
+
+        if mpi_size > 1:
+
+            if mpi_rank == 0:
+                MPI.Comm.Sendrecv(MPI.COMM_WORLD, arr[0], mpi_size-1, 0, arr[-1], mpi_size-1, 0)
+            if mpi_rank == mpi_size-1:
+                MPI.Comm.Sendrecv(MPI.COMM_WORLD, arr[-1], 0, 0, arr[0], 0, 0)
+
+            if mpi_rank > 0:
+
+                MPI.Comm.Sendrecv(MPI.COMM_WORLD, arr[start], left, 0, arr[start-1], left, 0)
+
+            if mpi_rank < mpi_size - 1:
+
+                MPI.Comm.Sendrecv(MPI.COMM_WORLD, arr[end-1], right, 0, arr[end], right, 0)
+
 
 
     # Sum accept on master rank
@@ -332,51 +396,68 @@ def MC_step(arr,Ts,nmax):
 
     # Sync lattice states to master rank
 
-
-    # MPI.Comm.Allgatherv(MPI.COMM_WORLD, [arr, sizes, disp, MPI.FLOAT64_T], arr)
-
-    print(f"{mpi_rank}: currently {arr[start:end, :]}")
-
-    MPI.Comm.barrier(MPI.COMM_WORLD)
-
-
     # once, in main (or module level)
     chunk, rem = divmod(nmax, mpi_size)
     rows = np.array([chunk + (1 if r < rem else 0) for r in range(mpi_size)])
     counts = rows * nmax
     displs = np.concatenate(([0], np.cumsum(counts)[:-1]))
 
-    # in MC_step
+
     MPI.COMM_WORLD.Allgatherv(MPI.IN_PLACE, [arr, counts, displs, MPI.DOUBLE])
 
-    # MPI.Comm.Allgatherv(MPI.COMM_WORLD, [arr[start:end, :], len(arr[start:end, :]), start, MPI.FLOAT64_T], [arr, MPI.FLOAT64_T])
-    
-    
-    # MPI.Comm.Allgatherv(MPI.COMM_WORLD, arr[start:end, :], [arr, (end-start)*nmax, start, MPI.FLOAT64_T])
-
-
-    # MPI.Comm.Allgatherv(MPI.COMM_WORLD, [arr[start:end, :], (end-start)*nmax, start, MPI.FLOAT64_T], [arr, (end-start)*nmax, start, MPI.FLOAT64_T])
-
-    if mpi_rank == 0:
-        print(arr)
-    # Halo code - only works if energy and order calcs are paralellised
-
-    # left = mpi_rank - 1
-    # right = mpi_rank + 1
-
-    # if mpi_rank > 0:
-
-    #     MPI.Comm.Sendrecv(MPI.COMM_WORLD, arr[start], left, 0, arr[start-1], left, 0)
-
-    # if mpi_rank < mpi_size - 1:
-
-    #     MPI.Comm.Sendrecv(MPI.COMM_WORLD, arr[end-1], right, 0, arr[end], right, 0)
-
-    
-    MPI.Comm.barrier(MPI.COMM_WORLD)
+    # MPI.Comm.barrier(MPI.COMM_WORLD)
 
 
     return accept/(nmax*nmax)
+
+
+def MC_step(arr,Ts,nmax):
+    """
+    Arguments:
+	  arr (float(nmax,nmax)) = array that contains lattice data;
+	  Ts (float) = reduced temperature (range 0 to 2);
+      nmax (int) = side length of square lattice.
+    Description:
+      Function to perform one MC step, which consists of an average
+      of 1 attempted change per lattice site.  Working with reduced
+      temperature Ts = kT/epsilon.  Function returns the acceptance
+      ratio for information.  This is the fraction of attempted changes
+      that are successful.  Generally aim to keep this around 0.5 for
+      efficient simulation.
+	Returns:
+	  accept/(nmax**2) (float) = acceptance ratio for current MCS.
+    """
+    #
+    # Pre-compute some random numbers.  This is faster than
+    # using lots of individual calls.  "scale" sets the width
+    # of the distribution for the angle changes - increases
+    # with temperature.
+    scale=0.1+Ts
+    accept = 0
+    xran = np.random.randint(0,high=nmax, size=(nmax,nmax))
+    yran = np.random.randint(0,high=nmax, size=(nmax,nmax))
+    aran = np.random.normal(scale=scale, size=(nmax,nmax))
+    for i in range(nmax):
+        for j in range(nmax):
+            ix = xran[i,j]
+            iy = yran[i,j]
+            ang = aran[i,j]
+            en0 = one_energy(arr,ix,iy,nmax)
+            arr[ix,iy] += ang
+            en1 = one_energy(arr,ix,iy,nmax)
+            if en1<=en0:
+                accept += 1
+            else:
+            # Now apply the Monte Carlo test - compare
+            # exp( -(E_new - E_old) / T* ) >= rand(0,1)
+                boltz = np.exp( -(en1 - en0) / Ts )
+
+                if boltz >= np.random.uniform(0.0,1.0):
+                    accept += 1
+                else:
+                    arr[ix,iy] -= ang
+    return accept/(nmax*nmax)
+
 #=======================================================================
 def main(program, nsteps, nmax, temp, pflag, _filename=""):
     """
@@ -401,26 +482,26 @@ def main(program, nsteps, nmax, temp, pflag, _filename=""):
     ratio = np.zeros(nsteps+1,dtype=np.dtype)
     order = np.zeros(nsteps+1,dtype=np.dtype)
 
-    if mpi_rank == 0:
-
-        # Set initial values in arrays
-        energy[0] = all_energy(lattice,nmax)
-        ratio[0] = 0.5 # ideal value
-        order[0] = get_order(lattice,nmax)
+    # if mpi_rank == 0:
+    # Set initial values in arrays
+    energy[0] = all_energy(lattice,nmax)
+    ratio[0] = 0.5 # ideal value
+    order[0] = get_order(lattice,nmax)
 
     # Begin doing and timing some MC steps.
     initial = time.time()
     # Run calculation on all ranks
     for it in range(1,nsteps+1):
+        # Calc order and ratio on master rank only
+        mc_ratio = MC_step_parallel(lattice,temp,nmax)
+        # Calc total energy on all ranks
+        energy[it] = all_energy(lattice,nmax)
 
-        mc_ratio = MC_step(lattice,temp,nmax)
 
-        # Only update data on master rank
         if mpi_rank == 0:
-
             ratio[it] = mc_ratio
-            energy[it] = all_energy(lattice,nmax)
             order[it] = get_order(lattice,nmax)
+
 
     final = time.time()
     runtime = final-initial
