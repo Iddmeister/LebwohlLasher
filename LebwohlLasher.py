@@ -180,20 +180,8 @@ def all_energy(arr,nmax):
 	Returns:
 	  enall (float) = reduced energy of lattice.
     """
-    ## Define chunk size and remainder for uneven grid sizes
-    chunk = nmax // mpi_size
-    remainder = nmax % mpi_size
-    # Define start(inclusive) and end(exclusive) indexes for mpi distribution
-    start = 0
-    end = 0
 
-    if (mpi_rank < remainder):
-        start = mpi_rank*(chunk+1)
-        end = start + chunk + 1
-    else:
-        start = (mpi_rank * chunk) + remainder
-        end = start + chunk
-
+    start, end = calcborders(nmax)
 
     enall = 0.0
 
@@ -240,7 +228,7 @@ def get_order(arr,nmax):
 
 
 
-def MC_step_parallel(arr,Ts,nmax):
+def MC_step(arr,Ts,nmax):
     """
     Arguments:
 	  arr (float(nmax,nmax)) = array that contains lattice data;
@@ -365,30 +353,15 @@ def MC_step_parallel(arr,Ts,nmax):
 
         #Exchange borders between ranks
 
-        left = mpi_rank - 1
-        right = mpi_rank + 1
-
-        if mpi_size > 1:
-
-            if mpi_rank == 0:
-                MPI.Comm.Sendrecv(MPI.COMM_WORLD, arr[0], mpi_size-1, 0, arr[-1], mpi_size-1, 0)
-            if mpi_rank == mpi_size-1:
-                MPI.Comm.Sendrecv(MPI.COMM_WORLD, arr[-1], 0, 0, arr[0], 0, 0)
-
-            if mpi_rank > 0:
-
-                MPI.Comm.Sendrecv(MPI.COMM_WORLD, arr[start], left, 0, arr[start-1], left, 0)
-
-            if mpi_rank < mpi_size - 1:
-
-                MPI.Comm.Sendrecv(MPI.COMM_WORLD, arr[end-1], right, 0, arr[end], right, 0)
+        exchangeborders(arr,nmax)
 
 
 
     # Sum accept on master rank
     # MPI.Comm.Allreduce(MPI.COMM_WORLD, [accept, MPI.INT64_T], [accept, MPI.INT64_T], MPI.SUM)
-    # accept = MPI.Comm.allreduce(MPI.COMM_WORLD, accept, MPI.SUM)
-    accept = MPI.Comm.reduce(MPI.COMM_WORLD, accept, MPI.SUM, 0)
+    accept = MPI.Comm.allreduce(MPI.COMM_WORLD, accept, MPI.SUM)
+    accept = float(accept)
+    # accept_reduced = MPI.Comm.reduce(MPI.COMM_WORLD, [accept, MPI.FLOAT64_T], MPI.SUM, 0)
 
     # accept = float(accept)
 
@@ -404,6 +377,25 @@ def MC_step_parallel(arr,Ts,nmax):
         return accept/(nmax*nmax)
 
 
+def calcborders(nmax):
+    chunk = nmax // mpi_size
+    remainder = nmax % mpi_size
+
+    # Define start(inclusive) and end(exclusive) indexes for mpi distribution
+    start = 0
+    end = 0
+
+    if (mpi_rank < remainder):
+        start = mpi_rank*(chunk+1)
+        end = start + chunk + 1
+
+    else:
+        start = (mpi_rank * chunk) + remainder
+        end = start + chunk
+
+    return start, end    
+
+
 def synclattice(arr,nmax):
     chunk, rem = divmod(nmax, mpi_size)
     rows = np.array([chunk + (1 if rank < rem else 0) for rank in range(mpi_size)])
@@ -412,52 +404,27 @@ def synclattice(arr,nmax):
     MPI.COMM_WORLD.Allgatherv(MPI.IN_PLACE, [arr, counts, displs, MPI.DOUBLE])
 
 
-def MC_step(arr,Ts,nmax):
-    """
-    Arguments:
-	  arr (float(nmax,nmax)) = array that contains lattice data;
-	  Ts (float) = reduced temperature (range 0 to 2);
-      nmax (int) = side length of square lattice.
-    Description:
-      Function to perform one MC step, which consists of an average
-      of 1 attempted change per lattice site.  Working with reduced
-      temperature Ts = kT/epsilon.  Function returns the acceptance
-      ratio for information.  This is the fraction of attempted changes
-      that are successful.  Generally aim to keep this around 0.5 for
-      efficient simulation.
-	Returns:
-	  accept/(nmax**2) (float) = acceptance ratio for current MCS.
-    """
-    #
-    # Pre-compute some random numbers.  This is faster than
-    # using lots of individual calls.  "scale" sets the width
-    # of the distribution for the angle changes - increases
-    # with temperature.
-    scale=0.1+Ts
-    accept = 0
-    xran = np.random.randint(0,high=nmax, size=(nmax,nmax))
-    yran = np.random.randint(0,high=nmax, size=(nmax,nmax))
-    aran = np.random.normal(scale=scale, size=(nmax,nmax))
-    for i in range(nmax):
-        for j in range(nmax):
-            ix = xran[i,j]
-            iy = yran[i,j]
-            ang = aran[i,j]
-            en0 = one_energy(arr,ix,iy,nmax)
-            arr[ix,iy] += ang
-            en1 = one_energy(arr,ix,iy,nmax)
-            if en1<=en0:
-                accept += 1
-            else:
-            # Now apply the Monte Carlo test - compare
-            # exp( -(E_new - E_old) / T* ) >= rand(0,1)
-                boltz = np.exp( -(en1 - en0) / Ts )
+def exchangeborders(arr,nmax):
 
-                if boltz >= np.random.uniform(0.0,1.0):
-                    accept += 1
-                else:
-                    arr[ix,iy] -= ang
-    return accept/(nmax*nmax)
+    start, end = calcborders(nmax)
+
+    left = mpi_rank - 1
+    right = mpi_rank + 1
+
+    if mpi_size > 1:
+
+        if mpi_rank == 0:
+            MPI.Comm.Sendrecv(MPI.COMM_WORLD, arr[0], mpi_size-1, 0, arr[-1], mpi_size-1, 0)
+        if mpi_rank == mpi_size-1:
+            MPI.Comm.Sendrecv(MPI.COMM_WORLD, arr[-1], 0, 0, arr[0], 0, 0)
+
+        if mpi_rank > 0:
+
+            MPI.Comm.Sendrecv(MPI.COMM_WORLD, arr[start], left, 0, arr[start-1], left, 0)
+
+        if mpi_rank < mpi_size - 1:
+
+            MPI.Comm.Sendrecv(MPI.COMM_WORLD, arr[end-1], right, 0, arr[end], right, 0)
 
 #=======================================================================
 def main(program, nsteps, nmax, temp, pflag, _filename=""):
@@ -483,7 +450,6 @@ def main(program, nsteps, nmax, temp, pflag, _filename=""):
     ratio = np.zeros(nsteps+1,dtype=np.dtype)
     order = np.zeros(nsteps+1,dtype=np.dtype)
 
-    # if mpi_rank == 0:
     # Set initial values in arrays
     energy[0] = all_energy(lattice,nmax)
     ratio[0] = 0.5 # ideal value
@@ -494,10 +460,16 @@ def main(program, nsteps, nmax, temp, pflag, _filename=""):
     # Run calculation on all ranks
     for it in range(1,nsteps+1):
         # Calc order and ratio on master rank only
-        _ratio = MC_step_parallel(lattice,temp,nmax)
+        _ratio = MC_step(lattice,temp,nmax)
+
+        # exchangeborders(lattice, nmax)
         synclattice(lattice, nmax)
+        # synclattice(lattice, nmax)
         # Calc total energy on all ranks
         _energy = all_energy(lattice,nmax)
+
+        # synclattice(lattice, nmax)
+
 
         if mpi_rank == 0:
             energy[it] = _energy
