@@ -194,20 +194,26 @@ def get_order(arr,nmax):
 	Returns:
 	  max(eigenvalues(Qab)) (float) = order parameter for lattice.
     """
-    Qab = np.zeros((3,3))
-    delta = np.eye(3,3)
-    #
-    # Generate a 3D unit vector for each cell (i,j) and
-    # put it in a (3,i,j) array.
-    #
+ 
+    ################
+    # for a in range(3):
+    #     for b in range(3):
+    #         Qab[a,b] += np.sum(3*lab[a,:,:]*lab[b,:,:] - delta[a,b])
+
+    # Qab[a,b] += np.sum(3*lab[a,:,:]*lab[b,:,:]
+    # Becomes 
+    # # 3*np.einsum("aij,bij->ab", lab, lab)
+
     lab = np.vstack((np.cos(arr),np.sin(arr),np.zeros_like(arr))).reshape(3,nmax,nmax)
-    for a in range(3):
-        for b in range(3):
-            for i in range(nmax):
-                for j in range(nmax):
-                    Qab[a,b] += 3*lab[a,i,j]*lab[b,i,j] - delta[a,b]
+
+    delta = np.eye(3,3)
+
+    Qab = 3*np.einsum("aij,bij->ab", lab, lab) - (delta*nmax*nmax)
+
     Qab = Qab/(2*nmax*nmax)
+
     eigenvalues,eigenvectors = np.linalg.eig(Qab)
+
     return eigenvalues.max()
 #=======================================================================
 def MC_step(arr,Ts,nmax):
@@ -302,12 +308,16 @@ def main(program, nsteps, nmax, temp, pflag, _filename=""):
 # main simulation function.
 #
 if __name__ == '__main__':
-    if int(len(sys.argv)) == 5:
+    if int(len(sys.argv)) == 6:
         PROGNAME = sys.argv[0]
         ITERATIONS = int(sys.argv[1])
         SIZE = int(sys.argv[2])
         TEMPERATURE = float(sys.argv[3])
         PLOTFLAG = int(sys.argv[4])
+        SEED = int(sys.argv[5])
+
+        np.random.seed(SEED)
+
         main(PROGNAME, ITERATIONS, SIZE, TEMPERATURE, PLOTFLAG)
     else:
         print("Usage: python {} <ITERATIONS> <SIZE> <TEMPERATURE> <PLOTFLAG>".format(sys.argv[0]))
