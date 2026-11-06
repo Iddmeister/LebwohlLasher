@@ -180,10 +180,6 @@ def all_energy(arr,nmax):
 	Returns:
 	  enall (float) = reduced energy of lattice.
     """
-
-    # Sync current lattice state across ranks
-    arr = MPI.Comm.bcast(MPI.COMM_WORLD, [arr, MPI.FLOAT64_T], 0)[0]
-
     ## Define chunk size and remainder for uneven grid sizes
     chunk = nmax // mpi_size
     remainder = nmax % mpi_size
@@ -391,24 +387,29 @@ def MC_step_parallel(arr,Ts,nmax):
 
     # Sum accept on master rank
     # MPI.Comm.Allreduce(MPI.COMM_WORLD, [accept, MPI.INT64_T], [accept, MPI.INT64_T], MPI.SUM)
-    accept = MPI.Comm.allreduce(MPI.COMM_WORLD, accept, MPI.SUM)
-    accept = float(accept)
+    # accept = MPI.Comm.allreduce(MPI.COMM_WORLD, accept, MPI.SUM)
+    accept = MPI.Comm.reduce(MPI.COMM_WORLD, accept, MPI.SUM, 0)
+
+    # accept = float(accept)
 
     # Sync lattice states to master rank
 
     # once, in main (or module level)
-    chunk, rem = divmod(nmax, mpi_size)
-    rows = np.array([chunk + (1 if r < rem else 0) for r in range(mpi_size)])
-    counts = rows * nmax
-    displs = np.concatenate(([0], np.cumsum(counts)[:-1]))
 
 
-    MPI.COMM_WORLD.Allgatherv(MPI.IN_PLACE, [arr, counts, displs, MPI.DOUBLE])
 
     # MPI.Comm.barrier(MPI.COMM_WORLD)
 
+    if mpi_rank == 0:
+        return accept/(nmax*nmax)
 
-    return accept/(nmax*nmax)
+
+def synclattice(arr,nmax):
+    chunk, rem = divmod(nmax, mpi_size)
+    rows = np.array([chunk + (1 if rank < rem else 0) for rank in range(mpi_size)])
+    counts = rows * nmax
+    displs = np.concatenate(([0], np.cumsum(counts)[:-1]))
+    MPI.COMM_WORLD.Allgatherv(MPI.IN_PLACE, [arr, counts, displs, MPI.DOUBLE])
 
 
 def MC_step(arr,Ts,nmax):
@@ -493,13 +494,14 @@ def main(program, nsteps, nmax, temp, pflag, _filename=""):
     # Run calculation on all ranks
     for it in range(1,nsteps+1):
         # Calc order and ratio on master rank only
-        mc_ratio = MC_step_parallel(lattice,temp,nmax)
+        _ratio = MC_step_parallel(lattice,temp,nmax)
+        synclattice(lattice, nmax)
         # Calc total energy on all ranks
-        energy[it] = all_energy(lattice,nmax)
-
+        _energy = all_energy(lattice,nmax)
 
         if mpi_rank == 0:
-            ratio[it] = mc_ratio
+            energy[it] = _energy
+            ratio[it] = _ratio
             order[it] = get_order(lattice,nmax)
 
 
