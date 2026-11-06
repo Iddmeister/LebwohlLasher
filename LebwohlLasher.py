@@ -176,10 +176,18 @@ def all_energy(arr,nmax):
 	Returns:
 	  enall (float) = reduced energy of lattice.
     """
+
     enall = 0.0
-    for i in range(nmax):
-        for j in range(nmax):
-            enall += one_energy(arr,i,j,nmax)
+
+    # Loop through shifts to get to cell neghbours (movement, axis)
+    for shift in [(1, 0), (-1, 0), (1, 1), (-1, 1)]:
+
+        dif_arr = arr - np.roll(arr, shift[0], axis=shift[1])
+
+        enall += np.sum(1.0 - 3.0*np.power(np.cos(dif_arr), 2))
+
+    enall *= 0.5
+
     return enall
 #=======================================================================
 def get_order(arr,nmax):
