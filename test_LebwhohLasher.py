@@ -1,6 +1,6 @@
 
 import sys
-from LebwohlLasher import *
+from old_LebwohlLasher import *
 import pytest
 import expected_test_results as expected
 

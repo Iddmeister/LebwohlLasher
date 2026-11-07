@@ -28,9 +28,13 @@ import datetime
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib as mpl
+from cython.parallel cimport prange
+cimport openmp
+from libc.math cimport cos
 
 
 OUTPUT_DIR = "output/"
+cdef int THREADS = 4
 
 #=======================================================================
 def initdat(nmax):
@@ -131,7 +135,7 @@ def savedat(arr,nsteps,Ts,runtime,ratio,energy,order,nmax,_filename=""):
         print("   {:05d}    {:6.4f} {:12.4f}  {:6.4f} ".format(i,ratio[i],energy[i],order[i]),file=FileOut)
     FileOut.close()
 #=======================================================================
-cpdef double one_energy(double[:, ::1] arr,int ix,int iy,int nmax):
+cpdef double one_energy(double[:, ::1] arr,int ix,int iy,int nmax) nogil:
     """
     Arguments:
 	  arr (float(nmax,nmax)) = array that contains lattice data;
@@ -155,14 +159,16 @@ cpdef double one_energy(double[:, ::1] arr,int ix,int iy,int nmax):
 # Add together the 4 neighbour contributions
 # to the energy
 #
+    # Using C math library cos function rather than numpy
+
     cdef double ang = arr[ix,iy]-arr[ixp,iy]
-    en += 0.5*(1.0 - 3.0*np.cos(ang)**2)
+    en += 0.5*(1.0 - 3.0*cos(ang)**2)
     ang = arr[ix,iy]-arr[ixm,iy]
-    en += 0.5*(1.0 - 3.0*np.cos(ang)**2)
+    en += 0.5*(1.0 - 3.0*cos(ang)**2)
     ang = arr[ix,iy]-arr[ix,iyp]
-    en += 0.5*(1.0 - 3.0*np.cos(ang)**2)
+    en += 0.5*(1.0 - 3.0*cos(ang)**2)
     ang = arr[ix,iy]-arr[ix,iym]
-    en += 0.5*(1.0 - 3.0*np.cos(ang)**2)
+    en += 0.5*(1.0 - 3.0*cos(ang)**2)
     return en
 #=======================================================================
 cpdef double all_energy(double[:,::1] arr,int nmax):
@@ -180,12 +186,13 @@ cpdef double all_energy(double[:,::1] arr,int nmax):
 
     cdef int i, j
 
-    for i in range(nmax):
+    for i in prange(nmax, nogil=True, num_threads=THREADS):
         for j in range(nmax):
             enall += one_energy(arr,i,j,nmax)
+
     return enall
 #=======================================================================
-cpdef double get_order(arr,nmax):
+cpdef double get_order(double[:,::1] arr, int nmax):
     """
     Arguments:
 	  arr (float(nmax,nmax)) = array that contains lattice data;
@@ -199,7 +206,7 @@ cpdef double get_order(arr,nmax):
     """
     # cdef double[:,::1] Qab = np.zeros((3,3))
 
-    Qab = np.zeros((3,3))
+    cdef double[:,::1] Qab = np.zeros((3,3))
 
 
     cdef double[:,::1] delta = np.eye(3,3)
@@ -210,14 +217,21 @@ cpdef double get_order(arr,nmax):
     cdef double[:,:,::1] lab = np.vstack((np.cos(arr),np.sin(arr),np.zeros_like(arr))).reshape(3,nmax,nmax)
 
     cdef int a, b, i, j
+    cdef double total
 
     for a in range(3):
         for b in range(3):
-            for i in range(nmax):
+            total = 0
+            for i in prange(nmax, nogil=True, num_threads=THREADS):
+            # for i in range(nmax):
                 for j in range(nmax):
-                    Qab[a,b] += 3*lab[a,i,j]*lab[b,i,j] - delta[a,b]
+                    total += (3*lab[a,i,j]*lab[b,i,j] - delta[a,b])/(2*nmax*nmax)
 
-    Qab = Qab/(2*nmax*nmax)
+            Qab[a, b] += total
+
+    
+    # Qab = Qab/(2*nmax*nmax)
+
     eigenvalues,eigenvectors = np.linalg.eig(Qab)
 
     return eigenvalues.max()
@@ -312,7 +326,7 @@ def main(program, int nsteps, int nmax, double temp, int pflag, int seed, _filen
     order[0] = get_order(lattice,nmax)
 
     # Begin doing and timing some MC steps.
-    cdef double initial = time.time()
+    cdef double initial = openmp.omp_get_wtime()
 
     cdef int it = 0
 
@@ -320,7 +334,8 @@ def main(program, int nsteps, int nmax, double temp, int pflag, int seed, _filen
         ratio[it] = MC_step(lattice,temp,nmax)
         energy[it] = all_energy(lattice,nmax)
         order[it] = get_order(lattice,nmax)
-    cdef double final = time.time()
+
+    cdef double final = openmp.omp_get_wtime()
     
     cdef double runtime = final-initial
     
