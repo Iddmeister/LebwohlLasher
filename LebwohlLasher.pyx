@@ -131,7 +131,7 @@ def savedat(arr,nsteps,Ts,runtime,ratio,energy,order,nmax,_filename=""):
         print("   {:05d}    {:6.4f} {:12.4f}  {:6.4f} ".format(i,ratio[i],energy[i],order[i]),file=FileOut)
     FileOut.close()
 #=======================================================================
-cdef double one_energy(double[:, ::1] arr,int ix,int iy,int nmax):
+cpdef double one_energy(double[:, ::1] arr,int ix,int iy,int nmax):
     """
     Arguments:
 	  arr (float(nmax,nmax)) = array that contains lattice data;
@@ -165,7 +165,7 @@ cdef double one_energy(double[:, ::1] arr,int ix,int iy,int nmax):
     en += 0.5*(1.0 - 3.0*np.cos(ang)**2)
     return en
 #=======================================================================
-cdef double all_energy(double[:,::1] arr,int nmax):
+cpdef double all_energy(double[:,::1] arr,int nmax):
     """
     Arguments:
 	  arr (float(nmax,nmax)) = array that contains lattice data;
@@ -185,7 +185,7 @@ cdef double all_energy(double[:,::1] arr,int nmax):
             enall += one_energy(arr,i,j,nmax)
     return enall
 #=======================================================================
-cdef double get_order(arr,nmax):
+cpdef double get_order(arr,nmax):
     """
     Arguments:
 	  arr (float(nmax,nmax)) = array that contains lattice data;
@@ -222,7 +222,7 @@ cdef double get_order(arr,nmax):
 
     return eigenvalues.max()
 #=======================================================================
-cdef double MC_step(double[:,::1] arr, double Ts, int nmax):
+cpdef double MC_step(double[:,::1] arr, double Ts, int nmax):
     """
     Arguments:
 	  arr (float(nmax,nmax)) = array that contains lattice data;
@@ -282,7 +282,7 @@ cdef double MC_step(double[:,::1] arr, double Ts, int nmax):
 
     return accept/(nmax*nmax)
 #=======================================================================
-def main(program, int nsteps, int nmax, double temp, int pflag, _filename=""):
+def main(program, int nsteps, int nmax, double temp, int pflag, int seed, _filename=""):
     """
     Arguments:
 	  program (string) = the name of the program;
@@ -295,6 +295,9 @@ def main(program, int nsteps, int nmax, double temp, int pflag, _filename=""):
     Returns:
       NULL
     """
+
+    np.random.seed(seed)
+
     # Create and initialise lattice
     cdef double[:,::1] lattice = initdat(nmax)
     # Plot initial frame of lattice
@@ -337,7 +340,9 @@ if __name__ == '__main__':
         SIZE = int(sys.argv[2])
         TEMPERATURE = float(sys.argv[3])
         PLOTFLAG = int(sys.argv[4])
-        main(PROGNAME, ITERATIONS, SIZE, TEMPERATURE, PLOTFLAG)
+        SEED = int(sys.argv[5])
+
+        main(PROGNAME, ITERATIONS, SIZE, TEMPERATURE, PLOTFLAG, SEED)
     else:
         print("Usage: python {} <ITERATIONS> <SIZE> <TEMPERATURE> <PLOTFLAG>".format(sys.argv[0]))
 #=======================================================================

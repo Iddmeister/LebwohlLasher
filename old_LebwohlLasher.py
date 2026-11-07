@@ -257,7 +257,7 @@ def MC_step(arr,Ts,nmax):
                     arr[ix,iy] -= ang
     return accept/(nmax*nmax)
 #=======================================================================
-def main(program, nsteps, nmax, temp, pflag, _filename=""):
+def main(program, nsteps, nmax, temp, pflag, seed, _filename=""):
     """
     Arguments:
 	  program (string) = the name of the program;
@@ -270,6 +270,9 @@ def main(program, nsteps, nmax, temp, pflag, _filename=""):
     Returns:
       NULL
     """
+
+    np.random.seed(seed)
+
     # Create and initialise lattice
     lattice = initdat(nmax)
     # Plot initial frame of lattice
@@ -302,13 +305,15 @@ def main(program, nsteps, nmax, temp, pflag, _filename=""):
 # main simulation function.
 #
 if __name__ == '__main__':
-    if int(len(sys.argv)) == 5:
+    if int(len(sys.argv)) == 6:
         PROGNAME = sys.argv[0]
         ITERATIONS = int(sys.argv[1])
         SIZE = int(sys.argv[2])
         TEMPERATURE = float(sys.argv[3])
         PLOTFLAG = int(sys.argv[4])
-        main(PROGNAME, ITERATIONS, SIZE, TEMPERATURE, PLOTFLAG)
+        SEED = int(sys.argv[5])
+
+        main(PROGNAME, ITERATIONS, SIZE, TEMPERATURE, PLOTFLAG, SEED)
     else:
         print("Usage: python {} <ITERATIONS> <SIZE> <TEMPERATURE> <PLOTFLAG>".format(sys.argv[0]))
 #=======================================================================
