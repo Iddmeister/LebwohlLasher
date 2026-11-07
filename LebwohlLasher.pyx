@@ -34,7 +34,6 @@ from libc.math cimport cos
 
 
 OUTPUT_DIR = "output/"
-cdef int THREADS = 4
 
 #=======================================================================
 def initdat(nmax):
@@ -171,7 +170,7 @@ cpdef double one_energy(double[:, ::1] arr,int ix,int iy,int nmax) nogil:
     en += 0.5*(1.0 - 3.0*cos(ang)**2)
     return en
 #=======================================================================
-cpdef double all_energy(double[:,::1] arr,int nmax):
+cpdef double all_energy(double[:,::1] arr,int nmax, int threads):
     """
     Arguments:
 	  arr (float(nmax,nmax)) = array that contains lattice data;
@@ -182,17 +181,56 @@ cpdef double all_energy(double[:,::1] arr,int nmax):
 	Returns:
 	  enall (float) = reduced energy of lattice.
     """
+
+    #######################
+    # Think about only looking at 2 neighbpurs per cell as using one_energy double counts bordering cells
+
+
+
     cdef double enall = 0.0
 
     cdef int i, j
 
-    for i in prange(nmax, nogil=True, num_threads=THREADS):
+
+    # cdef double en
+    # cdef int ixp1
+    # cdef int ixm1
+    # cdef int iyp1
+    # cdef int iym1
+
+    # cdef double ang
+
+    ###################
+    # Don't think the speedup is working tbh
+    ###################
+
+    for i in prange(nmax, nogil=True, num_threads=threads):
         for j in range(nmax):
+
             enall += one_energy(arr,i,j,nmax)
+
+            # en = 0.0
+
+            # ixp = (i+1)%nmax # These are the coordinates
+            # ixm = (i-1)%nmax # of the neighbours
+            # iyp = (j+1)%nmax # with wraparound
+            # iym = (j-1)%nmax #
+
+            # ang = arr[i,j]-arr[ixp,j]
+            # en += 0.5*(1.0 - 3.0*cos(ang)**2)
+            # ang = arr[i,j]-arr[ixm,j]
+            # en += 0.5*(1.0 - 3.0*cos(ang)**2)
+            # ang = arr[i,j]-arr[i,iyp]
+            # en += 0.5*(1.0 - 3.0*cos(ang)**2)
+            # ang = arr[i,j]-arr[i,iym]
+            # en += 0.5*(1.0 - 3.0*cos(ang)**2)
+
+            # enall += en
+
 
     return enall
 #=======================================================================
-cpdef double get_order(double[:,::1] arr, int nmax):
+cpdef double get_order(double[:,::1] arr, int nmax, int threads):
     """
     Arguments:
 	  arr (float(nmax,nmax)) = array that contains lattice data;
@@ -217,18 +255,18 @@ cpdef double get_order(double[:,::1] arr, int nmax):
     cdef double[:,:,::1] lab = np.vstack((np.cos(arr),np.sin(arr),np.zeros_like(arr))).reshape(3,nmax,nmax)
 
     cdef int a, b, i, j
-    cdef double total
+    # cdef double total
 
-    for a in range(3):
-        for b in range(3):
-            total = 0
-            for i in prange(nmax, nogil=True, num_threads=THREADS):
-            # for i in range(nmax):
+
+    ###################
+    # Don't think the speedup is working tbh
+    ###################
+
+    for i in prange(nmax, nogil=True, num_threads=threads):
+        for a in range(3):
+            for b in range(3):
                 for j in range(nmax):
-                    total += (3*lab[a,i,j]*lab[b,i,j] - delta[a,b])/(2*nmax*nmax)
-
-            Qab[a, b] += total
-
+                    Qab[a, b] += (3*lab[a,i,j]*lab[b,i,j] - delta[a,b])/(2*nmax*nmax)
     
     # Qab = Qab/(2*nmax*nmax)
 
@@ -296,7 +334,7 @@ cpdef double MC_step(double[:,::1] arr, double Ts, int nmax):
 
     return accept/(nmax*nmax)
 #=======================================================================
-def main(program, int nsteps, int nmax, double temp, int pflag, int seed, _filename=""):
+def main(program, int nsteps, int nmax, double temp, int pflag, int seed, int threads, _filename=""):
     """
     Arguments:
 	  program (string) = the name of the program;
@@ -321,9 +359,9 @@ def main(program, int nsteps, int nmax, double temp, int pflag, int seed, _filen
     cdef double[:] ratio = np.zeros(nsteps+1,dtype=np.double)
     cdef double[:] order = np.zeros(nsteps+1,dtype=np.double)
     # Set initial values in arrays
-    energy[0] = all_energy(lattice,nmax)
+    energy[0] = all_energy(lattice,nmax, threads)
     ratio[0] = 0.5 # ideal value
-    order[0] = get_order(lattice,nmax)
+    order[0] = get_order(lattice,nmax, threads)
 
     # Begin doing and timing some MC steps.
     cdef double initial = openmp.omp_get_wtime()
@@ -332,8 +370,8 @@ def main(program, int nsteps, int nmax, double temp, int pflag, int seed, _filen
 
     for it in range(1,nsteps+1):
         ratio[it] = MC_step(lattice,temp,nmax)
-        energy[it] = all_energy(lattice,nmax)
-        order[it] = get_order(lattice,nmax)
+        energy[it] = all_energy(lattice,nmax, threads)
+        order[it] = get_order(lattice,nmax, threads)
 
     cdef double final = openmp.omp_get_wtime()
     
@@ -349,15 +387,17 @@ def main(program, int nsteps, int nmax, double temp, int pflag, int seed, _filen
 # main simulation function.
 #
 if __name__ == '__main__':
-    if int(len(sys.argv)) == 5:
+    if int(len(sys.argv)) == 6:
         PROGNAME = sys.argv[0]
         ITERATIONS = int(sys.argv[1])
         SIZE = int(sys.argv[2])
         TEMPERATURE = float(sys.argv[3])
         PLOTFLAG = int(sys.argv[4])
         SEED = int(sys.argv[5])
+        THREADS = int(sys.argv[6])
 
-        main(PROGNAME, ITERATIONS, SIZE, TEMPERATURE, PLOTFLAG, SEED)
+
+        main(PROGNAME, ITERATIONS, SIZE, TEMPERATURE, PLOTFLAG, SEED, THREADS)
     else:
         print("Usage: python {} <ITERATIONS> <SIZE> <TEMPERATURE> <PLOTFLAG>".format(sys.argv[0]))
 #=======================================================================
