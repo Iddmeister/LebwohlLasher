@@ -250,25 +250,123 @@ def MC_step(arr,Ts,nmax):
     xran = np.random.randint(0,high=nmax, size=(nmax,nmax))
     yran = np.random.randint(0,high=nmax, size=(nmax,nmax))
     aran = np.random.normal(scale=scale, size=(nmax,nmax))
-    for i in range(nmax):
-        for j in range(nmax):
-            ix = xran[i,j]
-            iy = yran[i,j]
-            ang = aran[i,j]
-            en0 = one_energy(arr,ix,iy,nmax)
-            arr[ix,iy] += ang
-            en1 = one_energy(arr,ix,iy,nmax)
-            if en1<=en0:
-                accept += 1
-            else:
-            # Now apply the Monte Carlo test - compare
-            # exp( -(E_new - E_old) / T* ) >= rand(0,1)
-                boltz = np.exp( -(en1 - en0) / Ts )
+    boltz_val = np.random.uniform(0.0,1.0, size=(nmax, nmax))
 
-                if boltz >= np.random.uniform(0.0,1.0):
-                    accept += 1
-                else:
-                    arr[ix,iy] -= ang
+    # rand_cells = arr[xran.ravel()][yran.ravel()]
+    # print(rand_cells)
+    # print(xran.ravel())
+
+    # for shift in [(1, 0), (-1, 0), (1, 1), (-1, 1)]:
+
+    #     dif_arr = arr - np.roll(arr, shift[0], axis=shift[1])
+
+    #     enall += np.sum(1.0 - 3.0*np.power(np.cos(dif_arr), 2))
+
+    # enall *= 0.5
+
+    # Selection = tuple(xran.ravel()[0::2]), tuple(yran.ravel()[0::2])
+
+
+    ####################
+    # New
+    ####################
+
+    for run in range(0, 2):
+
+
+        xeven = (xran.ravel() % 2 == 0)
+        yeven = (yran.ravel() % 2 == 0)
+
+        checkerboard = (xeven == yeven)
+        if run == 1:
+            checkerboard = ~checkerboard
+
+        rx = tuple(xran.ravel()[checkerboard])
+        ry = tuple(yran.ravel()[checkerboard])
+
+        cell_values = arr[rx, ry]
+        cell_values_new = arr[rx, ry] + aran[rx, ry]
+
+
+        energies_0 = np.zeros(shape=cell_values.shape)
+        energies_1 = np.zeros(shape=cell_values.shape)
+
+        for shift in [(1, 0), (-1, 0), (1, 1), (-1, 1)]:
+        
+            neighbours = np.roll(arr, shift[0], axis=shift[1])
+
+            dif1 = cell_values - neighbours[rx, ry]
+            dif2 = cell_values_new - neighbours[rx, ry]
+
+
+            energies_0 += 0.5 * (1.0 - 3.0*np.power(np.cos(dif1), 2))
+            energies_1 += 0.5 * (1.0 - 3.0*np.power(np.cos(dif2), 2))
+
+
+        b = (energies_1 <= energies_0)
+
+        
+        # arr[tuple(xran.ravel()[0::2]), tuple(yran.ravel()[0::2])][b] += aran[tuple(xran.ravel()[0::2]), tuple(yran.ravel()[0::2])][b]
+
+        boltz = np.exp((-1.0 * (energies_1 - energies_0)) / Ts)
+
+        b2 = (boltz >= boltz_val[rx, ry])
+
+        final_b = b2 | b
+        # print(final_b)
+
+        accepted_x = np.array(rx)[final_b]
+    
+        accepted_y = np.array(ry)[final_b]
+
+        arr[tuple(accepted_x), tuple(accepted_y)] += aran[rx, ry][final_b]
+
+
+        # arr[tuple(xran.ravel()[run::2]), tuple(yran.ravel()[run::2])][final_b] += aran[tuple(xran.ravel()[run::2]), tuple(yran.ravel()[run::2])][final_b]
+        
+        accept += np.count_nonzero(final_b)
+
+
+    # for i in range(nmax):
+    #     for j in range(nmax):
+    #         ix = xran[i,j]
+    #         iy = yran[i,j]
+    #         ang = aran[i,j]
+    #         en0 = one_energy(arr,ix,iy,nmax)
+    #         arr[ix,iy] += ang
+    #         en1 = one_energy(arr,ix,iy,nmax)
+    #         if en1<=en0:
+    #             accept += 1
+    #         else:
+    #         # Now apply the Monte Carlo test - compare
+    #         # exp( -(E_new - E_old) / T* ) >= rand(0,1)
+    #             boltz = np.exp( -(en1 - en0) / Ts )
+
+    #             if boltz >= boltz_val[ix, iy]:
+    #                 accept += 1
+    #             else:
+    #                 arr[ix,iy] -= ang
+
+
+    # for i in range(nmax):
+    #     for j in range(nmax):
+    #         ix = xran[i,j]
+    #         iy = yran[i,j]
+    #         ang = aran[i,j]
+    #         en0 = one_energy(arr,ix,iy,nmax)
+    #         arr[ix,iy] += ang
+    #         en1 = one_energy(arr,ix,iy,nmax)
+    #         if en1<=en0:
+    #             accept += 1
+    #         else:
+    #         # Now apply the Monte Carlo test - compare
+    #         # exp( -(E_new - E_old) / T* ) >= rand(0,1)
+    #             boltz = np.exp( -(en1 - en0) / Ts )
+
+    #             if boltz >= np.random.uniform(0.0,1.0):
+    #                 accept += 1
+    #             else:
+    #                 arr[ix,iy] -= ang
     return accept/(nmax*nmax)
 #=======================================================================
 def main(program, nsteps, nmax, temp, pflag, _filename=""):
