@@ -1,3 +1,5 @@
 docs/
 output/
 profiler/
+__pycache__/
+benchmark.ipynb
