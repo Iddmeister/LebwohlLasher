@@ -28,6 +28,7 @@ import datetime
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib as mpl
+import numba
 
 
 OUTPUT_DIR = "output/"
@@ -131,6 +132,7 @@ def savedat(arr,nsteps,Ts,runtime,ratio,energy,order,nmax,_filename=""):
         print("   {:05d}    {:6.4f} {:12.4f}  {:6.4f} ".format(i,ratio[i],energy[i],order[i]),file=FileOut)
     FileOut.close()
 #=======================================================================
+@numba.jit(cache=True)
 def one_energy(arr,ix,iy,nmax):
     """
     Arguments:
@@ -165,6 +167,7 @@ def one_energy(arr,ix,iy,nmax):
     en += 0.5*(1.0 - 3.0*np.cos(ang)**2)
     return en
 #=======================================================================
+@numba.jit(cache=True, parallel=True)
 def all_energy(arr,nmax):
     """
     Arguments:
@@ -177,11 +180,12 @@ def all_energy(arr,nmax):
 	  enall (float) = reduced energy of lattice.
     """
     enall = 0.0
-    for i in range(nmax):
+    for i in numba.prange(nmax):
         for j in range(nmax):
             enall += one_energy(arr,i,j,nmax)
     return enall
 #=======================================================================
+@numba.jit(cache=True, parallel=True)
 def get_order(arr,nmax):
     """
     Arguments:
@@ -201,11 +205,18 @@ def get_order(arr,nmax):
     # put it in a (3,i,j) array.
     #
     lab = np.vstack((np.cos(arr),np.sin(arr),np.zeros_like(arr))).reshape(3,nmax,nmax)
+
     for a in range(3):
         for b in range(3):
-            for i in range(nmax):
+
+            total = 0.0
+
+            for i in numba.prange(nmax):
                 for j in range(nmax):
-                    Qab[a,b] += 3*lab[a,i,j]*lab[b,i,j] - delta[a,b]
+                    total += 3*lab[a,i,j]*lab[b,i,j] - delta[a,b]
+
+            Qab[a, b] += total
+
     Qab = Qab/(2*nmax*nmax)
     eigenvalues,eigenvectors = np.linalg.eig(Qab)
     return eigenvalues.max()
@@ -232,10 +243,19 @@ def MC_step(arr,Ts,nmax):
     # of the distribution for the angle changes - increases
     # with temperature.
     scale=0.1+Ts
-    accept = 0
     xran = np.random.randint(0,high=nmax, size=(nmax,nmax))
     yran = np.random.randint(0,high=nmax, size=(nmax,nmax))
     aran = np.random.normal(scale=scale, size=(nmax,nmax))
+    boltz_val = np.random.uniform(0, 1.0, size=(nmax,nmax))
+
+
+    return MC_step_loop(arr, nmax, Ts,xran, yran, aran, boltz_val)
+
+@numba.jit(cache=True)
+def MC_step_loop(arr,nmax,Ts,xran,yran,aran,boltz_val):
+
+    accept = 0
+
     for i in range(nmax):
         for j in range(nmax):
             ix = xran[i,j]
@@ -251,10 +271,11 @@ def MC_step(arr,Ts,nmax):
             # exp( -(E_new - E_old) / T* ) >= rand(0,1)
                 boltz = np.exp( -(en1 - en0) / Ts )
 
-                if boltz >= np.random.uniform(0.0,1.0):
+                if boltz >= boltz_val[ix, iy]:
                     accept += 1
                 else:
                     arr[ix,iy] -= ang
+
     return accept/(nmax*nmax)
 #=======================================================================
 def main(program, nsteps, nmax, temp, pflag, _filename=""):
@@ -302,12 +323,16 @@ def main(program, nsteps, nmax, temp, pflag, _filename=""):
 # main simulation function.
 #
 if __name__ == '__main__':
-    if int(len(sys.argv)) == 5:
+    if int(len(sys.argv)) == 6:
         PROGNAME = sys.argv[0]
         ITERATIONS = int(sys.argv[1])
         SIZE = int(sys.argv[2])
         TEMPERATURE = float(sys.argv[3])
         PLOTFLAG = int(sys.argv[4])
+        SEED = int(sys.argv[4])
+
+        np.random.seed(SEED)
+
         main(PROGNAME, ITERATIONS, SIZE, TEMPERATURE, PLOTFLAG)
     else:
         print("Usage: python {} <ITERATIONS> <SIZE> <TEMPERATURE> <PLOTFLAG>".format(sys.argv[0]))
