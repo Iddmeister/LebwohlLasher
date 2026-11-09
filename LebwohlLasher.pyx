@@ -30,7 +30,7 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 from cython.parallel cimport prange
 cimport openmp
-from libc.math cimport cos, sin, sqrt
+from libc.math cimport cos, sin, sqrt, exp
 
 
 OUTPUT_DIR = "output/"
@@ -313,7 +313,7 @@ cpdef double MC_step(double[:,::1] arr, double Ts, int nmax):
             else:
             # Now apply the Monte Carlo test - compare
             # exp( -(E_new - E_old) / T* ) >= rand(0,1)
-                boltz = np.exp( -(en1 - en0) / Ts )
+                boltz = exp( -(en1 - en0) / Ts )
 
                 if boltz >= np.random.uniform(0.0,1.0):
                     accept += 1
