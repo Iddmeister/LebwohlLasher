@@ -30,7 +30,6 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 import numba
 
-
 OUTPUT_DIR = "output/"
 
 #=======================================================================
@@ -323,14 +322,17 @@ def main(program, nsteps, nmax, temp, pflag, _filename=""):
 # main simulation function.
 #
 if __name__ == '__main__':
-    if int(len(sys.argv)) == 6:
+    if int(len(sys.argv)) == 7:
         PROGNAME = sys.argv[0]
         ITERATIONS = int(sys.argv[1])
         SIZE = int(sys.argv[2])
         TEMPERATURE = float(sys.argv[3])
         PLOTFLAG = int(sys.argv[4])
-        SEED = int(sys.argv[4])
+        SEED = int(sys.argv[5])
+        THREADS = int(sys.argv[6])
 
+        numba.set_num_threads(THREADS)
+        
         np.random.seed(SEED)
 
         main(PROGNAME, ITERATIONS, SIZE, TEMPERATURE, PLOTFLAG)
