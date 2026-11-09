@@ -30,7 +30,7 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 from cython.parallel cimport prange
 cimport openmp
-from libc.math cimport cos
+from libc.math cimport cos, sin, sqrt
 
 
 OUTPUT_DIR = "output/"
@@ -161,13 +161,13 @@ cpdef double one_energy(double[:, ::1] arr,int ix,int iy,int nmax) nogil:
     # Using C math library cos function rather than numpy
 
     cdef double ang = arr[ix,iy]-arr[ixp,iy]
-    en += 0.5*(1.0 - 3.0*cos(ang)**2)
+    en += 0.5*(1.0 - 3.0*cos(ang)*cos(ang))
     ang = arr[ix,iy]-arr[ixm,iy]
-    en += 0.5*(1.0 - 3.0*cos(ang)**2)
+    en += 0.5*(1.0 - 3.0*cos(ang)*cos(ang))
     ang = arr[ix,iy]-arr[ix,iyp]
-    en += 0.5*(1.0 - 3.0*cos(ang)**2)
+    en += 0.5*(1.0 - 3.0*cos(ang)*cos(ang))
     ang = arr[ix,iy]-arr[ix,iym]
-    en += 0.5*(1.0 - 3.0*cos(ang)**2)
+    en += 0.5*(1.0 - 3.0*cos(ang)*cos(ang))
     return en
 #=======================================================================
 cpdef double all_energy(double[:,::1] arr,int nmax, int threads):
@@ -242,37 +242,25 @@ cpdef double get_order(double[:,::1] arr, int nmax, int threads):
 	Returns:
 	  max(eigenvalues(Qab)) (float) = order parameter for lattice.
     """
-    # cdef double[:,::1] Qab = np.zeros((3,3))
+    
 
-    cdef double[:,::1] Qab = np.zeros((3,3))
+    cdef double sum_cos = 0.0
+    cdef double sum_sin = 0.0
+    cdef double ang = 0.0
 
-
-    cdef double[:,::1] delta = np.eye(3,3)
-    #
-    # Generate a 3D unit vector for each cell (i,j) and
-    # put it in a (3,i,j) array.
-    #
-    cdef double[:,:,::1] lab = np.vstack((np.cos(arr),np.sin(arr),np.zeros_like(arr))).reshape(3,nmax,nmax)
-
-    cdef int a, b, i, j
-    # cdef double total
-
-
-    ###################
-    # Don't think the speedup is working tbh
-    ###################
+    cdef int i, j
 
     for i in prange(nmax, nogil=True, num_threads=threads):
-        for a in range(3):
-            for b in range(3):
-                for j in range(nmax):
-                    Qab[a, b] += (3*lab[a,i,j]*lab[b,i,j] - delta[a,b])/(2*nmax*nmax)
+        for j in range(nmax):
+            ang = 2.0 * arr[i, j]
+            sum_cos += cos(ang)
+            sum_sin += sin(ang)
     
-    # Qab = Qab/(2*nmax*nmax)
+    cdef double n2 = nmax*nmax
 
-    eigenvalues,eigenvectors = np.linalg.eig(Qab)
+    return 0.25 + (0.75*(sqrt(sum_cos * sum_cos + sum_sin*sum_sin) / n2))
 
-    return eigenvalues.max()
+
 #=======================================================================
 cpdef double MC_step(double[:,::1] arr, double Ts, int nmax):
     """
