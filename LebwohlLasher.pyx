@@ -383,8 +383,7 @@ if __name__ == '__main__':
         PLOTFLAG = int(sys.argv[4])
         SEED = int(sys.argv[5])
         THREADS = int(sys.argv[6])
-
-
+        
         main(PROGNAME, ITERATIONS, SIZE, TEMPERATURE, PLOTFLAG, SEED, THREADS)
     else:
         print("Usage: python {} <ITERATIONS> <SIZE> <TEMPERATURE> <PLOTFLAG>".format(sys.argv[0]))
