@@ -209,23 +209,41 @@ def get_order(arr,nmax):
 	Returns:
 	  max(eigenvalues(Qab)) (float) = order parameter for lattice.
     """
-    Qab = np.zeros((3,3))
-    delta = np.eye(3,3)
-    #
-    # Generate a 3D unit vector for each cell (i,j) and
-    # put it in a (3,i,j) array.
-    #
-    lab = np.vstack((np.cos(arr),np.sin(arr),np.zeros_like(arr))).reshape(3,nmax,nmax)
-    for a in range(3):
-        for b in range(3):
-            for i in range(nmax):
-                for j in range(nmax):
-                    Qab[a,b] += 3*lab[a,i,j]*lab[b,i,j] - delta[a,b]
-    Qab = Qab/(2*nmax*nmax)
-    eigenvalues,eigenvectors = np.linalg.eig(Qab)
-    return eigenvalues.max()
-#=======================================================================
 
+    # chunk, rem = divmod(nmax, mpi_size)
+    start, end = calcborders(nmax)
+
+    ang = 2.0 * arr[start:end]
+
+    cos_sum = np.cos(ang).sum()
+    sin_sum = np.sin(ang).sum()
+
+    this_rank = np.array([cos_sum, sin_sum])
+    total = np.empty(2)
+
+    MPI.Comm.Allreduce(MPI.COMM_WORLD, this_rank, total, op=MPI.SUM)
+    # MPI.Comm.Allreduce(MPI.COMM_WORLD, [accept, MPI.INT64_T], [accept, MPI.INT64_T], MPI.SUM)
+
+
+    return 0.25 + 0.75 * np.hypot(total[0], total[1]) / (nmax*nmax)
+
+
+    # Qab = np.zeros((3,3))
+    # delta = np.eye(3,3)
+    # #
+    # # Generate a 3D unit vector for each cell (i,j) and
+    # # put it in a (3,i,j) array.
+    # #
+    # lab = np.vstack((np.cos(arr),np.sin(arr),np.zeros_like(arr))).reshape(3,nmax,nmax)
+    # for a in range(3):
+    #     for b in range(3):
+    #         for i in range(nmax):
+    #             for j in range(nmax):
+    #                 Qab[a,b] += 3*lab[a,i,j]*lab[b,i,j] - delta[a,b]
+    # Qab = Qab/(2*nmax*nmax)
+    # eigenvalues,eigenvectors = np.linalg.eig(Qab)
+    # return eigenvalues.max()
+#=======================================================================
 
 
 def MC_step(arr,Ts,nmax):
@@ -278,21 +296,12 @@ def MC_step(arr,Ts,nmax):
     # Wait for sync
     MPI.Comm.barrier(MPI.COMM_WORLD)
 
-    ## Define chunk size and remainder for uneven grid sizes
-    chunk = nmax // mpi_size
-    remainder = nmax % mpi_size
 
     # Define start(inclusive) and end(exclusive) indexes for mpi distribution
     start = 0
     end = 0
 
-    if (mpi_rank < remainder):
-        start = mpi_rank*(chunk+1)
-        end = start + chunk + 1
-
-    else:
-        start = (mpi_rank * chunk) + remainder
-        end = start + chunk
+    start, end = calcborders(nmax)
 
     # Loop through all cells in random ditribution
     # I don't know if this even speeds up anymore
@@ -302,20 +311,13 @@ def MC_step(arr,Ts,nmax):
 
         
 
-        for i in range(nmax):
+        for i in range(start, end):
             for j in range(nmax):
-                ix = xran[i,j]
-                iy = yran[i,j]
 
-                # If the random cell does not fall into this chunk then skip it
-                if ix < start or ix >= end:
-                    continue
-
-                xeven = (ix % 2) == 0
-                yeven = (iy % 2) == 0
+                xeven = (i % 2) == 0
+                yeven = (j % 2) == 0
 
                 #Check which sets of cells are being run
-                
                 if (xeven == yeven):
                     if run == 1:
                         continue
@@ -325,9 +327,9 @@ def MC_step(arr,Ts,nmax):
 
 
                 ang = aran[i,j]
-                en0 = one_energy(arr,ix,iy,nmax)
-                arr[ix,iy] += ang
-                en1 = one_energy(arr,ix,iy,nmax)
+                en0 = one_energy(arr,i,j,nmax)
+                arr[i,j] += ang
+                en1 = one_energy(arr,i,j,nmax)
                 if en1<=en0:
                     accept += 1
                 else:
@@ -341,7 +343,7 @@ def MC_step(arr,Ts,nmax):
                         # if i == 3 and j == 4:
                             # print(f"rank {mpi_rank} Accepted at {i}, {j}")
                     else:
-                        arr[ix,iy] -= ang
+                        arr[i,j] -= ang
 
 
 
@@ -462,19 +464,21 @@ def main(program, nsteps, nmax, temp, pflag, _filename=""):
         # Calc order and ratio on master rank only
         _ratio = MC_step(lattice,temp,nmax)
 
-        # exchangeborders(lattice, nmax)
-        synclattice(lattice, nmax)
-        # synclattice(lattice, nmax)
-        # Calc total energy on all ranks
+        exchangeborders(lattice, nmax)
+
         _energy = all_energy(lattice,nmax)
+        
+        _order = get_order(lattice,nmax)
 
         # synclattice(lattice, nmax)
-
 
         if mpi_rank == 0:
             energy[it] = _energy
             ratio[it] = _ratio
-            order[it] = get_order(lattice,nmax)
+            order[it] = _order
+
+
+    synclattice(lattice, nmax)
 
 
     final = time.time()
