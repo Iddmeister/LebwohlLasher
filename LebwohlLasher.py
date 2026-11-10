@@ -270,23 +270,16 @@ def MC_step(arr,Ts,nmax):
     scale=0.1+Ts
     accept = 0
 
-    xran = np.zeros(shape=(nmax, nmax))
-    yran = np.zeros(shape=(nmax, nmax))
     aran = np.zeros(shape=(nmax, nmax))
     boltz_limit = np.zeros(shape=(nmax, nmax))
 
 
     if mpi_rank == 0:
 
-        xran = np.random.randint(0,high=nmax, size=(nmax,nmax))
-        yran = np.random.randint(0,high=nmax, size=(nmax,nmax))
         aran = np.random.normal(scale=scale, size=(nmax,nmax))
         boltz_limit = np.random.uniform(0.0, 1.0, size=(nmax, nmax))
         
 
-    ### Should change to scatter so not broadcasting all data, only columns required
-    xran = MPI.Comm.bcast(MPI.COMM_WORLD, [xran, MPI.INT], root=0)[0]
-    yran = MPI.Comm.bcast(MPI.COMM_WORLD, [yran, MPI.INT], root=0)[0]
     aran = MPI.Comm.bcast(MPI.COMM_WORLD, [aran, MPI.FLOAT64_T], root=0)[0]
     boltz_limit = MPI.Comm.bcast(MPI.COMM_WORLD, [boltz_limit, MPI.FLOAT64_T], root=0)[0]
 
