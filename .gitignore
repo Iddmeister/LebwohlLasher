@@ -1,5 +1,8 @@
 docs/
 output/
 profiler/
+<<<<<<< HEAD
 build/
+=======
+>>>>>>> mpi4py
 __pycache__/

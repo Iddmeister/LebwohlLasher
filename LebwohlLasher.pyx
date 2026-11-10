@@ -32,6 +32,10 @@ from cython.parallel cimport prange
 cimport openmp
 from libc.math cimport cos, sin, sqrt, exp
 
+from mpi4py import MPI
+
+cdef int mpi_rank = MPI.COMM_WORLD.Get_rank()
+cdef int mpi_size = MPI.COMM_WORLD.Get_size()
 
 OUTPUT_DIR = "output/"
 
@@ -170,7 +174,7 @@ cpdef double one_energy(double[:, ::1] arr,int ix,int iy,int nmax) nogil:
     en += 0.5*(1.0 - 3.0*cos(ang)*cos(ang))
     return en
 #=======================================================================
-cpdef double all_energy(double[:,::1] arr,int nmax, int threads):
+cpdef double all_energy(double[:,::1] arr,int nmax):
     """
     Arguments:
 	  arr (float(nmax,nmax)) = array that contains lattice data;
@@ -181,56 +185,25 @@ cpdef double all_energy(double[:,::1] arr,int nmax, int threads):
 	Returns:
 	  enall (float) = reduced energy of lattice.
     """
-
-    #######################
-    # Think about only looking at 2 neighbpurs per cell as using one_energy double counts bordering cells
-
-
-
     cdef double enall = 0.0
 
     cdef int i, j
 
+    enall = 0.0
 
-    # cdef double en
-    # cdef int ixp1
-    # cdef int ixm1
-    # cdef int iyp1
-    # cdef int iym1
-
-    # cdef double ang
-
-    ###################
-    # Don't think the speedup is working tbh
-    ###################
-
-    for i in prange(nmax, nogil=True, num_threads=threads):
+    # Calc total energy for each chunk of lattice, each chunk handled by a different rank
+    for i in range(start, end):
         for j in range(nmax):
 
             enall += one_energy(arr,i,j,nmax)
+    # Sum total energy across all ranks to master rank
+    enall = MPI.Comm.reduce(MPI.COMM_WORLD, enall, MPI.SUM, 0)
 
-            # en = 0.0
-
-            # ixp = (i+1)%nmax # These are the coordinates
-            # ixm = (i-1)%nmax # of the neighbours
-            # iyp = (j+1)%nmax # with wraparound
-            # iym = (j-1)%nmax #
-
-            # ang = arr[i,j]-arr[ixp,j]
-            # en += 0.5*(1.0 - 3.0*cos(ang)**2)
-            # ang = arr[i,j]-arr[ixm,j]
-            # en += 0.5*(1.0 - 3.0*cos(ang)**2)
-            # ang = arr[i,j]-arr[i,iyp]
-            # en += 0.5*(1.0 - 3.0*cos(ang)**2)
-            # ang = arr[i,j]-arr[i,iym]
-            # en += 0.5*(1.0 - 3.0*cos(ang)**2)
-
-            # enall += en
-
+    MPI.Comm.barrier(MPI.COMM_WORLD)
 
     return enall
 #=======================================================================
-cpdef double get_order(double[:,::1] arr, int nmax, int threads):
+cpdef double get_order(double[:,::1] arr, int nmax):
     """
     Arguments:
 	  arr (float(nmax,nmax)) = array that contains lattice data;
@@ -242,26 +215,27 @@ cpdef double get_order(double[:,::1] arr, int nmax, int threads):
 	Returns:
 	  max(eigenvalues(Qab)) (float) = order parameter for lattice.
     """
-    
 
-    cdef double sum_cos = 0.0
-    cdef double sum_sin = 0.0
-    cdef double ang = 0.0
+    # chunk, rem = divmod(nmax, mpi_size)
+    start, end = calcborders(nmax)
 
-    cdef int i, j
+    ang = 2.0 * arr[start:end]
 
-    for i in prange(nmax, nogil=True, num_threads=threads):
-        for j in range(nmax):
-            ang = 2.0 * arr[i, j]
-            sum_cos += cos(ang)
-            sum_sin += sin(ang)
-    
-    cdef double n2 = nmax*nmax
+    cos_sum = np.cos(ang).sum()
+    sin_sum = np.sin(ang).sum()
 
-    return 0.25 + (0.75*(sqrt(sum_cos * sum_cos + sum_sin*sum_sin) / n2))
+    this_rank = np.array([cos_sum, sin_sum])
+    total = np.empty(2)
 
+    MPI.Comm.Allreduce(MPI.COMM_WORLD, this_rank, total, op=MPI.SUM)
+    # MPI.Comm.Allreduce(MPI.COMM_WORLD, [accept, MPI.INT64_T], [accept, MPI.INT64_T], MPI.SUM)
+
+
+    return 0.25 + 0.75 * np.hypot(total[0], total[1]) / (nmax*nmax)
 
 #=======================================================================
+
+
 cpdef double MC_step(double[:,::1] arr, double Ts, int nmax):
     """
     Arguments:
@@ -283,46 +257,162 @@ cpdef double MC_step(double[:,::1] arr, double Ts, int nmax):
     # using lots of individual calls.  "scale" sets the width
     # of the distribution for the angle changes - increases
     # with temperature.
-    cdef double scale=0.1+Ts
-    cdef double accept = 0
+    scale=0.1+Ts
+    accept = 0
 
-    cdef int[:,:] xran = np.random.randint(0,high=nmax, size=(nmax,nmax), dtype=np.int32)
-    cdef int[:,:] yran = np.random.randint(0,high=nmax, size=(nmax,nmax), dtype=np.int32)
-    cdef double[:, :] aran = np.random.normal(scale=scale, size=(nmax,nmax))
+    aran = np.zeros(shape=(nmax, nmax))
+    boltz_limit = np.zeros(shape=(nmax, nmax))
 
-    cdef int i, j
-    cdef int ix
-    cdef int iy
-    cdef double ang
-    cdef double en0
-    cdef double en1 
-    cdef double boltz
 
-    for i in range(nmax):
-        for j in range(nmax):
-            ix = xran[i,j]
-            iy = yran[i,j]
-            ang = aran[i,j]
+    if mpi_rank == 0:
 
-            en0 = one_energy(arr,ix,iy,nmax)
-            arr[ix,iy] += ang
-            en1 = one_energy(arr,ix,iy,nmax)
+        aran = np.random.normal(scale=scale, size=(nmax,nmax))
+        boltz_limit = np.random.uniform(0.0, 1.0, size=(nmax, nmax))
+        
 
-            if en1<=en0:
-                accept += 1
-            else:
-            # Now apply the Monte Carlo test - compare
-            # exp( -(E_new - E_old) / T* ) >= rand(0,1)
-                boltz = exp( -(en1 - en0) / Ts )
+    aran = MPI.Comm.bcast(MPI.COMM_WORLD, [aran, MPI.FLOAT64_T], root=0)[0]
+    boltz_limit = MPI.Comm.bcast(MPI.COMM_WORLD, [boltz_limit, MPI.FLOAT64_T], root=0)[0]
 
-                if boltz >= np.random.uniform(0.0,1.0):
+    # print(f"Before update {mpi_rank} = {arr[3,4]}")
+
+
+    # Wait for sync
+    MPI.Comm.barrier(MPI.COMM_WORLD)
+
+
+    # Define start(inclusive) and end(exclusive) indexes for mpi distribution
+    start = 0
+    end = 0
+
+    start, end = calcborders(nmax)
+
+    # Loop through all cells in random ditribution
+    # I don't know if this even speeds up anymore
+
+    # Split lattice into checkerboard pattern
+    for run in range(0, 2):
+
+        
+
+        for i in range(start, end):
+            for j in range(nmax):
+
+                xeven = (i % 2) == 0
+                yeven = (j % 2) == 0
+
+                #Check which sets of cells are being run
+                if (xeven == yeven):
+                    if run == 1:
+                        continue
+                else:
+                    if run == 0:
+                        continue
+
+
+                ang = aran[i,j]
+                en0 = one_energy(arr,i,j,nmax)
+                arr[i,j] += ang
+                en1 = one_energy(arr,i,j,nmax)
+                if en1<=en0:
                     accept += 1
                 else:
-                    arr[ix,iy] -= ang
+                # Now apply the Monte Carlo test - compare
+                # exp( -(E_new - E_old) / T* ) >= rand(0,1)
+                    boltz = np.exp( -(en1 - en0) / Ts )
 
-    return accept/(nmax*nmax)
+                    #Changed comparison to use pregenerated array of uniform random values - a lot of these are redundant
+                    if boltz >= boltz_limit[i,j]:
+                        accept += 1
+                        # if i == 3 and j == 4:
+                            # print(f"rank {mpi_rank} Accepted at {i}, {j}")
+                    else:
+                        arr[i,j] -= ang
+
+
+
+        #### Between runs
+        MPI.Comm.barrier(MPI.COMM_WORLD)
+
+        if run == 1:
+            break
+
+        #Exchange borders between ranks
+
+        exchangeborders(arr,nmax)
+
+
+
+    # Sum accept on master rank
+    # MPI.Comm.Allreduce(MPI.COMM_WORLD, [accept, MPI.INT64_T], [accept, MPI.INT64_T], MPI.SUM)
+    accept = MPI.Comm.allreduce(MPI.COMM_WORLD, accept, MPI.SUM)
+    accept = float(accept)
+    # accept_reduced = MPI.Comm.reduce(MPI.COMM_WORLD, [accept, MPI.FLOAT64_T], MPI.SUM, 0)
+
+    # accept = float(accept)
+
+    # Sync lattice states to master rank
+
+    # once, in main (or module level)
+
+
+
+    # MPI.Comm.barrier(MPI.COMM_WORLD)
+
+    if mpi_rank == 0:
+        return accept/(nmax*nmax)
+
+
+def calcborders(nmax):
+    chunk = nmax // mpi_size
+    remainder = nmax % mpi_size
+
+    # Define start(inclusive) and end(exclusive) indexes for mpi distribution
+    start = 0
+    end = 0
+
+    if (mpi_rank < remainder):
+        start = mpi_rank*(chunk+1)
+        end = start + chunk + 1
+
+    else:
+        start = (mpi_rank * chunk) + remainder
+        end = start + chunk
+
+    return start, end    
+
+
+def synclattice(arr,nmax):
+    chunk, rem = divmod(nmax, mpi_size)
+    rows = np.array([chunk + (1 if rank < rem else 0) for rank in range(mpi_size)])
+    counts = rows * nmax
+    displs = np.concatenate(([0], np.cumsum(counts)[:-1]))
+    MPI.COMM_WORLD.Allgatherv(MPI.IN_PLACE, [arr, counts, displs, MPI.DOUBLE])
+
+
+def exchangeborders(arr,nmax):
+
+    start, end = calcborders(nmax)
+
+    left = mpi_rank - 1
+    right = mpi_rank + 1
+
+    if mpi_size > 1:
+
+        if mpi_rank == 0:
+            MPI.Comm.Sendrecv(MPI.COMM_WORLD, arr[0], mpi_size-1, 0, arr[-1], mpi_size-1, 0)
+        if mpi_rank == mpi_size-1:
+            MPI.Comm.Sendrecv(MPI.COMM_WORLD, arr[-1], 0, 0, arr[0], 0, 0)
+
+        if mpi_rank > 0:
+
+            MPI.Comm.Sendrecv(MPI.COMM_WORLD, arr[start], left, 0, arr[start-1], left, 0)
+
+        if mpi_rank < mpi_size - 1:
+
+            MPI.Comm.Sendrecv(MPI.COMM_WORLD, arr[end-1], right, 0, arr[end], right, 0)
+
 #=======================================================================
-def main(program, int nsteps, int nmax, double temp, int pflag, int seed, int threads, _filename=""):
+def main(program, int nsteps, int nmax, double temp, int pflag, int seed, _filename=""):
     """
     Arguments:
 	  program (string) = the name of the program;
@@ -340,36 +430,60 @@ def main(program, int nsteps, int nmax, double temp, int pflag, int seed, int th
 
     # Create and initialise lattice
     cdef double[:,::1] lattice = initdat(nmax)
+    
     # Plot initial frame of lattice
     plotdat(lattice,pflag,nmax)
     # Create arrays to store energy, acceptance ratio and order parameter
     cdef double[:] energy = np.zeros(nsteps+1,dtype=np.double)
     cdef double[:] ratio = np.zeros(nsteps+1,dtype=np.double)
     cdef double[:] order = np.zeros(nsteps+1,dtype=np.double)
+
     # Set initial values in arrays
-    energy[0] = all_energy(lattice,nmax, threads)
+    energy[0] = all_energy(lattice,nmax)
     ratio[0] = 0.5 # ideal value
-    order[0] = get_order(lattice,nmax, threads)
+    order[0] = get_order(lattice,nmax)
 
     # Begin doing and timing some MC steps.
     cdef double initial = openmp.omp_get_wtime()
 
     cdef int it = 0
 
+    cdef double _ratio
+    cdef double _energy
+    cdef double _order
+
+    # Run calculation on all ranks
     for it in range(1,nsteps+1):
-        ratio[it] = MC_step(lattice,temp,nmax)
-        energy[it] = all_energy(lattice,nmax, threads)
-        order[it] = get_order(lattice,nmax, threads)
+        # Calc order and ratio on master rank only
+        _ratio = MC_step(lattice,temp,nmax)
+
+        exchangeborders(lattice, nmax)
+
+        _energy = all_energy(lattice,nmax)
+        
+        _order = get_order(lattice,nmax)
+
+        # synclattice(lattice, nmax)
+
+        if mpi_rank == 0:
+            energy[it] = _energy
+            ratio[it] = _ratio
+            order[it] = _order
+
+
+    synclattice(lattice, nmax)
+
 
     cdef double final = openmp.omp_get_wtime()
-    
     cdef double runtime = final-initial
+
+    if mpi_rank == 0:
     
-    # Final outputs
-    print("{}: Size: {:d}, Steps: {:d}, T*: {:5.3f}: Order: {:5.3f}, Time: {:8.6f} s".format(program, nmax,nsteps,temp,order[nsteps-1],runtime))
-    # Plot final frame of lattice and generate output file
-    savedat(lattice,nsteps,temp,runtime,ratio,energy,order,nmax, _filename="" if len(_filename) <= 0 else _filename)
-    plotdat(lattice,pflag,nmax)
+        # Final outputs
+        print("{}: Size: {:d}, Steps: {:d}, T*: {:5.3f}: Order: {:5.3f}, Time: {:8.6f} s".format(program, nmax,nsteps,temp,order[nsteps-1],runtime))
+        # Plot final frame of lattice and generate output file
+        savedat(lattice,nsteps,temp,runtime,ratio,energy,order,nmax, _filename="" if len(_filename) <= 0 else _filename)
+        plotdat(lattice,pflag,nmax)
 #=======================================================================
 # Main part of program, getting command line arguments and calling
 # main simulation function.
@@ -382,9 +496,11 @@ if __name__ == '__main__':
         TEMPERATURE = float(sys.argv[3])
         PLOTFLAG = int(sys.argv[4])
         SEED = int(sys.argv[5])
-        THREADS = int(sys.argv[6])
         
-        main(PROGNAME, ITERATIONS, SIZE, TEMPERATURE, PLOTFLAG, SEED, THREADS)
+        np.random.seed(SEED)
+
+        main(PROGNAME, ITERATIONS, SIZE, TEMPERATURE, PLOTFLAG)
+
     else:
         print("Usage: python {} <ITERATIONS> <SIZE> <TEMPERATURE> <PLOTFLAG>".format(sys.argv[0]))
 #=======================================================================
