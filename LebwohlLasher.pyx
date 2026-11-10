@@ -189,7 +189,10 @@ cpdef double all_energy(double[:,::1] arr,int nmax):
 
     cdef int i, j
 
-    enall = 0.0
+    borders = calcborders(nmax)
+
+    cdef int start = borders[0]
+    cdef int end = borders[1]
 
     # Calc total energy for each chunk of lattice, each chunk handled by a different rank
     for i in range(start, end):
@@ -197,11 +200,18 @@ cpdef double all_energy(double[:,::1] arr,int nmax):
 
             enall += one_energy(arr,i,j,nmax)
     # Sum total energy across all ranks to master rank
-    enall = MPI.Comm.reduce(MPI.COMM_WORLD, enall, MPI.SUM, 0)
 
     MPI.Comm.barrier(MPI.COMM_WORLD)
 
-    return enall
+    cdef double total = 0
+    # MPI.Comm.Allreduce(MPI.COMM_WORLD, [enall, MPI.FLOAT64_T], [total, MPI.FLOAT64_T], MPI.SUM)
+    
+    total = MPI.Comm.allreduce(MPI.COMM_WORLD, enall, MPI.SUM)
+    # total = MPI.Comm.reduce(MPI.COMM_WORLD, enall, MPI.SUM
+
+    MPI.Comm.barrier(MPI.COMM_WORLD)
+
+    return total
 #=======================================================================
 cpdef double get_order(double[:,::1] arr, int nmax):
     """
@@ -219,7 +229,7 @@ cpdef double get_order(double[:,::1] arr, int nmax):
     # chunk, rem = divmod(nmax, mpi_size)
     start, end = calcborders(nmax)
 
-    ang = 2.0 * arr[start:end]
+    ang = np.multiply(arr[start:end], 2.0)
 
     cos_sum = np.cos(ang).sum()
     sin_sum = np.sin(ang).sum()
@@ -257,11 +267,11 @@ cpdef double MC_step(double[:,::1] arr, double Ts, int nmax):
     # using lots of individual calls.  "scale" sets the width
     # of the distribution for the angle changes - increases
     # with temperature.
-    scale=0.1+Ts
-    accept = 0
+    cdef double scale = 0.1+Ts
+    cdef double accept = 0
 
-    aran = np.zeros(shape=(nmax, nmax))
-    boltz_limit = np.zeros(shape=(nmax, nmax))
+    cdef double[:, :] aran = np.zeros(shape=(nmax, nmax))
+    cdef double[:, :] boltz_limit = np.zeros(shape=(nmax, nmax))
 
 
     if mpi_rank == 0:
@@ -270,8 +280,12 @@ cpdef double MC_step(double[:,::1] arr, double Ts, int nmax):
         boltz_limit = np.random.uniform(0.0, 1.0, size=(nmax, nmax))
         
 
-    aran = MPI.Comm.bcast(MPI.COMM_WORLD, [aran, MPI.FLOAT64_T], root=0)[0]
-    boltz_limit = MPI.Comm.bcast(MPI.COMM_WORLD, [boltz_limit, MPI.FLOAT64_T], root=0)[0]
+
+    MPI.Comm.Bcast(MPI.COMM_WORLD, aran, root=0)
+    MPI.Comm.Bcast(MPI.COMM_WORLD, boltz_limit, root=0)
+
+    # aran = MPI.Comm.bcast(MPI.COMM_WORLD, [aran, MPI.FLOAT64_T], root=0)[0]
+    # boltz_limit = MPI.Comm.bcast(MPI.COMM_WORLD, [boltz_limit, MPI.FLOAT64_T], root=0)[0]
 
     # print(f"Before update {mpi_rank} = {arr[3,4]}")
 
@@ -281,15 +295,28 @@ cpdef double MC_step(double[:,::1] arr, double Ts, int nmax):
 
 
     # Define start(inclusive) and end(exclusive) indexes for mpi distribution
-    start = 0
-    end = 0
+    cdef int start = 0
+    cdef int end = 0
 
-    start, end = calcborders(nmax)
+    borders = calcborders(nmax)
+    start = borders[0]
+    end = borders[1]
 
     # Loop through all cells in random ditribution
     # I don't know if this even speeds up anymore
 
     # Split lattice into checkerboard pattern
+
+    cdef int run = 0
+    cdef int i = 0
+    cdef int j = 0
+    cdef double ang = 0
+    cdef int xeven = 0
+    cdef yeven = 0
+    cdef double en0 = 0
+    cdef double en1 = 0
+    cdef double boltz = 0
+
     for run in range(0, 2):
 
         
@@ -343,32 +370,21 @@ cpdef double MC_step(double[:,::1] arr, double Ts, int nmax):
 
 
     # Sum accept on master rank
-    # MPI.Comm.Allreduce(MPI.COMM_WORLD, [accept, MPI.INT64_T], [accept, MPI.INT64_T], MPI.SUM)
     accept = MPI.Comm.allreduce(MPI.COMM_WORLD, accept, MPI.SUM)
     accept = float(accept)
-    # accept_reduced = MPI.Comm.reduce(MPI.COMM_WORLD, [accept, MPI.FLOAT64_T], MPI.SUM, 0)
-
-    # accept = float(accept)
-
-    # Sync lattice states to master rank
-
-    # once, in main (or module level)
-
-
-
-    # MPI.Comm.barrier(MPI.COMM_WORLD)
 
     if mpi_rank == 0:
         return accept/(nmax*nmax)
 
 
-def calcborders(nmax):
-    chunk = nmax // mpi_size
-    remainder = nmax % mpi_size
+def calcborders(int nmax):
+
+    cdef int chunk = nmax // mpi_size
+    cdef int remainder = nmax % mpi_size
 
     # Define start(inclusive) and end(exclusive) indexes for mpi distribution
-    start = 0
-    end = 0
+    cdef int start = 0
+    cdef int end = 0
 
     if (mpi_rank < remainder):
         start = mpi_rank*(chunk+1)
