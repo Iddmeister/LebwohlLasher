@@ -191,41 +191,10 @@ cpdef double all_energy(double[:,::1] arr,int nmax, int threads):
 
     cdef int i, j
 
-
-    # cdef double en
-    # cdef int ixp1
-    # cdef int ixm1
-    # cdef int iyp1
-    # cdef int iym1
-
-    # cdef double ang
-
-    ###################
-    # Don't think the speedup is working tbh
-    ###################
-
     for i in prange(nmax, nogil=True, num_threads=threads):
         for j in range(nmax):
 
             enall += one_energy(arr,i,j,nmax)
-
-            # en = 0.0
-
-            # ixp = (i+1)%nmax # These are the coordinates
-            # ixm = (i-1)%nmax # of the neighbours
-            # iyp = (j+1)%nmax # with wraparound
-            # iym = (j-1)%nmax #
-
-            # ang = arr[i,j]-arr[ixp,j]
-            # en += 0.5*(1.0 - 3.0*cos(ang)**2)
-            # ang = arr[i,j]-arr[ixm,j]
-            # en += 0.5*(1.0 - 3.0*cos(ang)**2)
-            # ang = arr[i,j]-arr[i,iyp]
-            # en += 0.5*(1.0 - 3.0*cos(ang)**2)
-            # ang = arr[i,j]-arr[i,iym]
-            # en += 0.5*(1.0 - 3.0*cos(ang)**2)
-
-            # enall += en
 
 
     return enall
