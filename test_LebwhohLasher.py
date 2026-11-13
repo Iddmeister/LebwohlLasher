@@ -1,6 +1,6 @@
 
 import sys
-from old_LebwohlLasher import *
+from LebwohlLasher import *
 import pytest
 import expected_test_results as expected
 
@@ -122,15 +122,10 @@ def test_savedat(lattice, nsteps, Ts, runtime, ratio, energy, order, nmax, expec
 
 def test_main(nsteps, nmax, temp, seed, expect_filepath):
 
-<<<<<<< HEAD
-    main("test", nsteps, nmax, temp, 0, seed, _filename="test_output.txt")
-      
-    with open("output/test_output.txt") as test_f:
-=======
+
     np.random.seed(seed)
 
     main("test", nsteps, nmax, temp, 0, _filename="test_output.txt")
->>>>>>> mpi4py
 
     if mpi_rank == 0:
         
